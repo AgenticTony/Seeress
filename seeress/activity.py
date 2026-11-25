@@ -24,7 +24,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -271,19 +271,26 @@ def due(when: float, schedule: Schedule = DEFAULT_SCHEDULE) -> bool:
     return local.tm_wday in schedule.days and schedule.start <= local.tm_hour <= schedule.end
 
 
-def read_events(home: Path, hours: float | None = None, *, now: float | None = None) -> list[Event]:
+def read_events(
+    home: Path,
+    hours: float | None = None,
+    *,
+    now: float | None = None,
+    patterns: Sequence[str] = ("activity-*.jsonl", "spike-*.jsonl"),
+) -> list[Event]:
     """The activity events in the record under home, oldest first.
 
     home is the Seeress home. The record is read file by file in file-name order, and the
     events come back in time order. Events that share a second keep the order of the files
     and of the lines. The files are the spike logger's and the capture's: spike-*.jsonl and
-    activity-*.jsonl. With hours, only the events of the last hours are returned, up to now
+    activity-*.jsonl, or only those whose names match one of patterns. With hours, only the
+    events of the last hours are returned, up to now
     or, when now is not given, up to the clock. Each ts is read as the machine's local time.
     Nothing is written.
     """
     cutoff = _cutoff(hours, now)
     events: list[Event] = []
-    for data in _lines(home, "activity-*.jsonl", "spike-*.jsonl"):
+    for data in _lines(home, *patterns):
         event = _event_in(data)
         if event is None or (cutoff is not None and not _is_since(event.ts, cutoff)):
             continue

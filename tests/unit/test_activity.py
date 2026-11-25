@@ -1130,3 +1130,21 @@ def test_a_line_that_does_not_go_in_is_raised(
 
     (path,) = (tmp_path / "watch").iterdir()
     assert path.read_text(encoding="utf-8") == ""
+
+
+def test_the_reader_asked_for_one_record_reads_that_one_alone(tmp_path: Path) -> None:
+    """While two loggers run, the record holds both and the mine reads both. Asked for one
+    of them, the reader reads that one alone."""
+    write(tmp_path, FILE, nav("one.example.org"))
+    activity.write_event(tmp_path, click(), now=WRITTEN_AT)
+
+    assert {event.site for event in activity.read_events(tmp_path)} == {
+        "one.example.org",
+        "example.org",
+    }
+
+    older = activity.read_events(tmp_path, patterns=("spike-*.jsonl",))
+    own = activity.read_events(tmp_path, patterns=("activity-*.jsonl",))
+
+    assert [event.site for event in older] == ["one.example.org"]
+    assert [event.site for event in own] == ["example.org"]

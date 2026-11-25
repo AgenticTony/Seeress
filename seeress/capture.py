@@ -647,16 +647,32 @@ def review(home: Path | None = None, *, today: date | None = None) -> str:
     """What the record holds, in plain text for a person: what `seeress capture-review`
     prints.
 
-    One line for each day that is held, the oldest first: the day, how many events, the
-    size of the file, and how many of each kind, the most first. A line that cannot be read
-    is counted, and not read. A last line says how many days the settings keep, and from
-    which day files will be deleted. It reads, and writes nothing. Raises ConfigError when
-    the settings cannot be read.
+    One line for each day the capture holds, the oldest first: the day, how many events,
+    the size of the file, and how many of each kind, the most first. A line that cannot be
+    read is counted, and not read.
+
+    Then, while files of the older logger are in the folder of the record, what it holds:
+    one line for each day of its lines, with its events by kind. The mine reads both
+    records, and this shows both, so that the two can be compared day by day. A file of
+    that logger is named for the day it started, and each of its lines is counted on the
+    day of its own ts.
+
+    A last line says how many days the settings keep, and from which day files will be
+    deleted. It reads, and writes nothing. Raises ConfigError when the settings cannot be
+    read.
     """
     home = home if home is not None else config.seeress_home()
     kept = config.load_settings(home).capture.keep_days
     day = date.today() if today is None else today
-    lines = [_reviewed(written, path) for written, path in _held(home)] or ["No day is held."]
+    lines = [_reviewed(written, path) for written, path in _held(home)] or [
+        "The capture holds no day."
+    ]
+    older: dict[str, Counter[str]] = {}
+    for event in activity.read_events(home, patterns=("spike-*.jsonl",)):
+        older.setdefault(event.ts[:10], Counter())[event.kind] += 1
+    if older:
+        lines.append("The older logger holds:")
+        lines += [f"{when}   {_counted(counts)}" for when, counts in sorted(older.items())]
     gone = (day - timedelta(days=kept)).isoformat()
     lines.append(
         f"{kept} days are kept, as the settings say. Files written before {gone} will be deleted."
@@ -674,12 +690,22 @@ def _reviewed(written: date, path: Path) -> str:
             except ValueError:  # not JSON, or not an event
                 counts["unreadable"] += 1
     events = sum(count for kind, count in counts.items() if kind != "unreadable")
-    kinds = ", ".join(
+    count = f"{events} event" + ("" if events == 1 else "s")
+    return f"{written.isoformat()}   {count}   {_size(path.stat().st_size)}   {_kinds(counts)}"
+
+
+def _counted(counts: Counter[str]) -> str:
+    """How many events, and how many of each kind: what one day of the older logger holds."""
+    count = f"{sum(counts.values())} event" + ("" if sum(counts.values()) == 1 else "s")
+    return f"{count}   {_kinds(counts)}"
+
+
+def _kinds(counts: Counter[str]) -> str:
+    """How many of each kind, the most first, and by name where as many."""
+    return ", ".join(
         f"{kind} {count}"
         for kind, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     )
-    count = f"{events} event" + ("" if events == 1 else "s")
-    return f"{written.isoformat()}   {count}   {_size(path.stat().st_size)}   {kinds}"
 
 
 def _size(size: int) -> str:

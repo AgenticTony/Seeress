@@ -1713,7 +1713,7 @@ def test_the_review_takes_the_days_kept_from_the_settings(tmp_path: Path) -> Non
     said = capture.review(tmp_path, today=TODAY)
 
     assert said == (
-        "No day is held.\n"
+        "The capture holds no day.\n"
         "7 days are kept, as the settings say. Files written before 2027-03-24 will be deleted."
     )
 
@@ -1742,6 +1742,88 @@ def test_the_review_counts_a_line_it_cannot_read_and_no_other_file(tmp_path: Pat
     assert line.startswith("2026-10-27   1 event   ")
     assert line.endswith("   click 1, unreadable 1")
     assert last.startswith("30 days are kept")
+
+
+def test_the_review_says_what_the_older_logger_holds_by_the_day_of_each_line(
+    tmp_path: Path,
+) -> None:
+    """While both run, the mine reads both records, and the review showed the capture's
+    days alone. A file of the older logger is named for the day it started and holds lines
+    of many days: each is counted on the day of its line, and a line that holds no event is
+    not. The title on a line is not read."""
+    written(tmp_path, "20261126", "click", "input")
+    title = "a title that must not survive"
+    logged = [
+        {
+            "ts": "2026-11-24T09:00:00",
+            "kind": "nav",
+            "target": "A1B2C3D4",
+            "url": "https://one.example/a",
+            "title": title,
+        },
+        {
+            "ts": "2026-11-24T09:05:00",
+            "kind": "nav",
+            "url": "https://one.example/c",
+            "title": title,
+        },
+        {
+            "ts": "2026-11-24T09:06:00",
+            "kind": "focus",
+            "url": "https://one.example/b",
+            "title": title,
+        },
+        {
+            "ts": "2026-11-26T10:00:00",
+            "kind": "tab_open",
+            "target": "A1B2C3D4",
+            "url": "https://two.example/",
+            "title": title,
+        },
+        {
+            "ts": "2026-11-26T10:01:00",
+            "kind": "focus",
+            "url": "https://two.example/inbox",
+            "title": title,
+        },
+        {"ts": "2026-11-26T10:02:00", "kind": "chrome_down", "error": "invented"},
+    ]
+    (tmp_path / "watch" / "spike-20261124.jsonl").write_text(
+        "".join(json.dumps(line) + "\n" for line in logged) + "a line that is nobody's to read\n",
+        encoding="utf-8",
+    )
+
+    said = capture.review(tmp_path, today=TODAY)
+
+    (first, *rest) = said.splitlines()
+    assert first.startswith("2026-11-26   2 events   ")
+    assert rest == [
+        "The older logger holds:",  # the most first, and by name where as many
+        "2026-11-24   3 events   navigate 2, focus 1",
+        "2026-11-26   2 events   focus 1, navigate 1",
+        "30 days are kept, as the settings say. Files written before 2027-03-01 will be deleted.",
+    ]
+    assert title not in said
+
+
+def test_the_review_says_when_only_the_older_logger_holds_a_day(tmp_path: Path) -> None:
+    (tmp_path / "watch").mkdir()
+    line = {
+        "ts": "2026-11-24T09:00:00",
+        "kind": "nav",
+        "target": "A1B2C3D4",
+        "url": "https://one.example/",
+    }
+    (tmp_path / "watch" / "spike-20261124.jsonl").write_text(
+        json.dumps(line) + "\n", encoding="utf-8"
+    )
+
+    assert capture.review(tmp_path, today=TODAY) == (
+        "The capture holds no day.\n"
+        "The older logger holds:\n"
+        "2026-11-24   1 event   navigate 1\n"
+        "30 days are kept, as the settings say. Files written before 2027-03-01 will be deleted."
+    )
 
 
 def test_forget_names_what_is_before_the_day_and_deletes_nothing_without_a_yes(
