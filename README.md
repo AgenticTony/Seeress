@@ -6,10 +6,11 @@ Local brains. Your browser. No credits, no cloud, no telemetry.
 agent loop, flows and the activity logger work, and so does a new capture of what a person
 does in a page. It is built and tested, and it is not yet the logger: before it replaces
 the old one it runs beside it for three days (see "The capture"). Under them: a lock
-file, 1,401 unit and contract tests, 50 tests on a real browser, strict types, lint,
+file, 1,476 unit and contract tests, 55 tests on a real browser, strict types, lint,
 three import contracts and a CI workflow. They pass on the machine this was built on
-(macOS, arm64) and in CI on GitHub's macOS runner; the first green run is
-[45566464574](https://github.com/AgenticTony/Seeress/actions/runs/45566464574).
+(macOS, arm64). In CI on GitHub's macOS runner the first green run was
+[45566464574](https://github.com/AgenticTony/Seeress/actions/runs/45566464574); the
+tests added since run there when this is published.
 
 **Not verified.** The personal door's acceptance was last proven on a throwaway Chromium
 that stands where your Chrome does, not on your Chrome. The new capture is proven the same
@@ -61,14 +62,15 @@ The profile decides three things, and each is closed on its own:
 | Control | Proof |
 |---|---|
 | Domain guard fails closed | `tests/unit/test_brain.py` and `test_agent.py`: a client domain and its subdomains remove every cloud endpoint; a page that cannot be read counts as a client page |
-| Door isolation | 51 tests in `tests/unit/test_bodies.py`, and 4 on a real Chromium in `tests/e2e/test_bodies.py` |
+| Door isolation | 56 tests in `tests/unit/test_bodies.py`, and 4 on a real Chromium in `tests/e2e/test_bodies.py` |
 | Allow-listed environments | `tests/unit/test_env.py`; the egress check, which starts Seeress with 17 planted settings and requires that none reaches a child |
 | Model-written code | `seeress/browser_api.py`: the prompt is built from the library's real helper list, and a step may use those helpers and plain builtins only |
 | Browser with no route out | `tests/e2e/test_route.py`, and the egress check, which asks for a page from an address that is not exempt and requires a refusal |
 | Nothing leaves the machine | `tools/egress_check.py`, a step in CI |
-| Only what an event holds leaves the record | `tests/unit/test_activity.py` and `tests/contract/test_contracts.py`: a site, a path without query or fragment, a tab, a second and an action. No title and no query reaches one |
+| Only what an event holds leaves the record | `tests/unit/test_activity.py`, `tests/unit/test_capture.py`, `tests/contract/test_contracts.py` and 48 tests on a real browser in `tests/e2e/test_capture.py`: a site, a path without query or fragment, a tab, a second and an action. No title and no query reaches one |
 | Only what the browser did is a person's | `tests/e2e/test_capture.py`, 43 tests on a browser Seeress starts: a click, an input or a change that a script in the page made is not recorded, and a page that stops its events at the document does not silence the capture |
 | The capture reaches its browser and nothing else | the egress check's third door: the capture asks no model, and no other machine |
+| No proxy between Seeress and the browser | Each DevTools connection names no proxy: `tests/unit/test_capture.py`, `tests/unit/test_watcher.py`, `tests/unit/test_bodies.py`. Tried on the library: with a proxy named, a loopback address goes to it by default |
 | A failure is a failure | `tests/unit/test_cli.py`: every command exits 1 and prints the reason |
 
 Nothing in the browser tool's own code was changed to get here. Its switches are set from
@@ -93,7 +95,7 @@ api_key_env = "TENANT_KEY"                     # optional
 [capture]                                      # every key is optional
 days = ["mon", "tue", "wed", "thu", "fri"]     # Monday to Friday when left out
 from = "08:00"                                 # 08:00 when left out
-to = "18:00"                                   # 18:00 when left out
+to = "18:00"                                   # 18:00 when left out; "24:00" is the whole day
 keep_days = 30                                 # 30 when left out
 ```
 
@@ -176,7 +178,11 @@ seeress capture-forget --before 2026-11-01 --yes   # delete every day before tha
 
 With no address, `python -m seeress.capture` reads where Chrome publishes its own for this
 user. So Chrome's remote debugging has to be on, and a second connection to it may raise
-Chrome's approval sheet.
+Chrome's approval sheet. It takes an address as its argument; `--home` names another home,
+and `--seconds N` stops it after N seconds. It exits 0 when it was stopped as it ran, and 1
+when it was down, or had failed, at the end. On stderr it says how many events it wrote,
+and why the last capture ended. Nothing starts it for you: run it from a terminal, and
+start it again after a reboot.
 
 While both records exist, the mine reads both and `capture-review` shows both: a line for
 each day of the older logger too, with its events by kind, so that the two can be compared
@@ -189,17 +195,26 @@ also says what was done, and never what a field held:
 
 - the element's tag;
 - how the element is named on its page: the first of a `data-testid`, an `id` that has no
-  digit in it, and a `name`. Digits become `#`. A value is cut at 200 characters. An
-  element that none of the three names is told apart by its place in the page;
+  digit in it, and a `name`. Digits become `#`. A value is cut at 200 characters, and never
+  inside one. An element that none of the three names is told apart by its place in the
+  page. No attribute that holds prose names an element: not `alt`, not `placeholder`, not
+  `aria-label`;
 - for an input, the kind of the field. A password, a one-time code and a card are named by
   their kind, and what was typed is never read.
+
+A page chooses the address of its tab and the name of its element, so both are bounded: a
+path is cut at 2,048 characters, a tag at 100, and a site of more than 253 makes no event.
+Whether the capture is recording is said in `~/.seeress/watch/capture-status.json`, which
+the capture rewrites and only it writes.
 
 What it does not do:
 
 - Record outside the schedule in the settings, or past the cap: no tab may put 200 events
   in the record in one minute.
-- Record in a private window, in a frame inside a page, or on a browser that is Seeress's
-  own.
+- Record in a private window, in a frame inside a page.
+- Attach to a browser that carries the marker of Seeress's own. The marker is a cookie,
+  told by its name and its site together: a page may name a cookie of its own as the marker
+  is named, and that is no marker.
 - Take what a script in the page did for a person's.
 - Read, move or delete any file of the old logger. Only its own `activity-*.jsonl` is the
   capture's.
@@ -283,9 +298,10 @@ uv run python tools/publish_public.py --push
   files, protected by the OS account and disk encryption, not yet by a vault.
 - **In attach mode the capture cannot tell the agent's tabs from yours.** Every run of the
   browser tool is noted, and those minutes are left out of the mine.
-- **A page's own script can still make a submit the browser marks as trusted**
-  (`requestSubmit()`), and a script at the very top of a document can stop events before the
-  capture hears any. The first is recorded as a person's; of the second nothing is heard.
+- **A page's own script can still make a submit or an input the browser marks as trusted**
+  (`requestSubmit()`, and `execCommand('insertText')` on a focused field), and a script at
+  the very top of a document can stop events before the capture hears any. The first two
+  are recorded as a person's; of the third nothing is heard.
 - **Nothing bounds the size of one message from the browser.** A page that logs one very
   large line to its console makes the capture hold it in memory.
 - **Attach mode is for personal and consultant use.** Chrome and Edge have an administrator
