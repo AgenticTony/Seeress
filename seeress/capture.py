@@ -834,6 +834,19 @@ class Gate:
             self._status.written(event)
 
 
+async def _left(task: asyncio.Future[Any] | None) -> None:
+    """Leave a task the capture waited on. One that has ended has its end read, and one that
+    is still going is cancelled and waited for, so that nothing of it is left behind to be
+    destroyed unread."""
+    if task is None:
+        return
+    if not task.done():
+        task.cancel()
+        await asyncio.wait({task})
+    if not task.cancelled():
+        task.exception()
+
+
 # ----------------------------------------------------------------- the connection ---
 
 
@@ -874,6 +887,7 @@ async def watch(
             for command in sessions.opens():
                 await socket.send(json.dumps(command))
             stopping = asyncio.create_task(ended.wait())
+            receiving: asyncio.Future[Any] | None = None
             try:
                 while not ended.is_set():
                     receiving = asyncio.ensure_future(socket.recv())
@@ -890,9 +904,6 @@ async def watch(
                     if keeping is not None and keeping in done:
                         await keeping  # what keeps the record failed, if it did: so does this
                     if receiving not in done:
-                        receiving.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await receiving
                         break  # stopped, as asked
                     message = json.loads(receiving.result())
                     for command in sessions.hears(message, time.time()):
@@ -902,9 +913,10 @@ async def watch(
                         answered = True  # the browser has answered its first command
                         status.state("connected")
             finally:
-                stopping.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await stopping
+                # However this ended, by a stop, by an error or by a fault, nothing the
+                # loop waited on is left behind it.
+                await _left(receiving)
+                await _left(stopping)
     except (OSError, WebSocketException, CaptureError) as error:
         _ended(status, "down", _reason(error))
         raise

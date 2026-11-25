@@ -7,6 +7,7 @@ never touch the user's Chrome: looking up its address fails loudly in the fixtur
 Run them with:  .venv/bin/python -m pytest -m e2e
 """
 
+import gc
 import json
 import os
 import threading
@@ -826,28 +827,41 @@ def test_a_status_that_cannot_be_written_hides_no_error(home: Path) -> None:
     assert type(recorder.error).__name__ == "ConnectionRefusedError"
 
 
-def test_a_failure_of_what_is_kept_ends_the_capture_and_says_why(
-    home: Path, browser: tuple[Browser, str]
-) -> None:
-    """What keeps the record is done on the loop of the capture. A failure there is not
-    hidden: the capture ends with it, and the status says why."""
+def a_capture_whose_keeping_failed(address: str, home: Path) -> str:
+    """Run a capture whose keeping of the record fails at once. Returns what the status says
+    of it, and holds nothing of the capture: what it left behind is free to be destroyed."""
 
     def keep() -> None:
         raise OSError("the record could not be deleted")
 
-    recorder = capture.Recorder(
-        browser[1], lambda event: None, keep=keep, status=capture.Status(home)
-    )
+    recorder = capture.Recorder(address, lambda event: None, keep=keep, status=capture.Status(home))
     recorder.start()
     try:
         until(lambda: recorder.error, "the error of what could not be kept", 10)
     finally:
         recorder.stop()
 
-    report = capture.status(home)
     assert str(recorder.error) == "the record could not be deleted"
+    return capture.status(home)
+
+
+def test_a_failure_of_what_is_kept_ends_the_capture_and_says_why(
+    home: Path, browser: tuple[Browser, str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """What keeps the record is done on the loop of the capture. A failure there is not
+    hidden: the capture ends with it, and the status says why. And the capture leaves
+    nothing behind it unread: the answer it was waiting for is given up, and read."""
+    report = a_capture_whose_keeping_failed(browser[1], home)
     assert report.startswith("Capture is down since ")
     assert "OSError: the record could not be deleted" in report
+
+    gc.collect()  # what the capture left behind is destroyed here, and says so if unread
+    complained = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "asyncio" and "Task" in record.getMessage()
+    ]
+    assert complained == []
 
 
 def test_nothing_is_kept_by_a_capture_that_cannot_connect(home: Path) -> None:

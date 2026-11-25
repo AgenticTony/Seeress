@@ -8,6 +8,7 @@ starts.
 """
 
 import asyncio
+import gc
 import json
 import os
 import re
@@ -1389,3 +1390,42 @@ def test_the_listener_cuts_a_fingerprint_whole_and_where_the_record_can_hold_it(
 
     assert whole in capture.LISTENER
     assert capture.LISTENER.count(".slice(") == 1  # and nowhere else is anything cut
+
+
+# ------------------------------------------------- what the loop leaves behind it ---
+
+
+def test_a_task_that_is_still_going_is_cancelled_when_it_is_left() -> None:
+    """The answer the capture was waiting for, when it stops waiting: given up, and at
+    once."""
+
+    async def scenario() -> bool:
+        never = asyncio.Event()
+        task = asyncio.ensure_future(never.wait())
+        await asyncio.wait_for(capture._left(task), 5)  # for a task never given up
+        return task.cancelled()
+
+    assert asyncio.run(scenario()) is True
+
+
+def test_a_task_that_ended_with_an_error_is_read_when_it_is_left() -> None:
+    """Left unread, the loop says so when the task is destroyed: an error nobody saw. So
+    that nothing of the capture is left behind it unread, the end of a task is read."""
+    said: list[object] = []
+
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda loop, context: said.append(context.get("message")))
+
+        async def failing() -> None:
+            raise RuntimeError("an error nobody awaits")
+
+        task = asyncio.ensure_future(failing())
+        await asyncio.sleep(0)  # it has ended, with its error
+        await capture._left(task)
+        del task
+        gc.collect()  # destroyed here, unread or not
+
+    asyncio.run(scenario())
+
+    assert said == []
