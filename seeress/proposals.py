@@ -340,12 +340,14 @@ def last(home: Path, name: str) -> Proposal | None:
 
 
 def remember(home: Path, proposal: Proposal) -> Proposal:
-    """Write the proposal as one more line under its name, and return what was written.
+    """Write a proposal found again as one more line under its name, and return what was
+    written.
 
-    What was remembered last under the name decides what is kept. If its status is approved
-    or compiled, the new proposal keeps its goal and its status: they are the user's words
-    and the user's decision. If it is dismissed, it stays so. The evidence is always the
-    new one.
+    This is the miner's. What was remembered last under the name decides what is kept. If
+    its status is approved or compiled, the new proposal keeps its goal and its status: they
+    are the user's words and the user's decision. If it is dismissed, it stays so. The
+    evidence is always the new one. A command that makes a decision writes its line with
+    record, which defers to nothing.
     """
     before = last(home, proposal.name)
     if before is not None:
@@ -353,6 +355,11 @@ def remember(home: Path, proposal: Proposal) -> Proposal:
             proposal = replace(proposal, goal=before.goal, status=before.status)
         elif before.status == "dismissed":
             proposal = replace(proposal, status="dismissed")
+    return record(home, proposal)
+
+
+def record(home: Path, proposal: Proposal) -> Proposal:
+    """Write the proposal as one more line under its name, exactly as it is."""
     path = _file(home, proposal.name)  # a bad name is refused before anything is made
     folder(home)
     # The file is given its mode as it is opened, so that it is never readable by another
@@ -361,6 +368,32 @@ def remember(home: Path, proposal: Proposal) -> Proposal:
     with os.fdopen(opened, "a", encoding="utf-8") as file:
         file.write(json.dumps(proposal.as_dict(), ensure_ascii=False) + "\n")
     return proposal
+
+
+def remembered(home: Path, name: str) -> Proposal:
+    """The proposal remembered last under a name.
+
+    Raises MiningError when there is none, and names the proposals there are.
+    """
+    found = last(home, name)
+    if found is not None:
+        return found
+    there_are = sorted(path.stem for path in files(home))
+    if not there_are:
+        raise MiningError(f"no proposal named {name!r}: none has been remembered yet.")
+    raise MiningError(f"no proposal named {name!r}. Proposals there are: {', '.join(there_are)}.")
+
+
+def every(home: Path) -> list[Proposal]:
+    """The proposal remembered last under every name there is, in name order. A file of
+    which no line reads holds none. Nothing is made."""
+    return [found for path in files(home) if (found := last(home, path.stem)) is not None]
+
+
+def files(home: Path) -> list[Path]:
+    """The files of the proposals under home, in name order. Nothing is made."""
+    place = home / "proposals"
+    return sorted(place.glob("*.jsonl")) if place.is_dir() else []
 
 
 def _file(home: Path, name: str) -> Path:

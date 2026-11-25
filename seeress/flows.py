@@ -10,6 +10,7 @@ A flow runs on a door, so it passes the same door check and the same name check 
 
 import re
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from . import activity, bodies, config
@@ -23,7 +24,8 @@ from .agent import (
 )
 from .brain import Message, chat, endpoint_for, message
 from .browser_api import SYSTEM_PROMPT, check_code
-from .errors import FlowError, SeeressError, UnsafeCodeError
+from .errors import FlowError, MiningError, SeeressError, UnsafeCodeError
+from .proposals import Proposal, record, remembered
 from .runner import run_browser_command
 
 FLOWS_DIR = Path(__file__).resolve().parent.parent / "flows"
@@ -157,6 +159,46 @@ def create_flow(name: str, description: str, profile: str, max_steps: int = 6) -
         path.write_text(code.strip() + "\n", encoding="utf-8")
         return path
     raise FlowError("the model did not produce a final flow script; refine the description")
+
+
+def description_for(proposal: Proposal) -> str:
+    """What the compiler is told of a proposal: the goal the user approved, and one sentence
+    on its sites.
+
+    Nothing else: no path, no count, no hour, and no sentence of a model.
+    """
+    if proposal.order == "varies":
+        sites = f"The task uses these sites: {', '.join(proposal.sites)}."
+    else:
+        sites = f"The task visits these sites, in this order: {' → '.join(proposal.sites)}."
+    return f"{proposal.goal} {sites}"
+
+
+def compile_proposal(home: Path | None, name: str) -> Path:
+    """Have the agent write the flow of a proposal the user approved, on the personal door.
+
+    The proposal must be approved, or compiled already, and its goal must not be empty:
+    nothing is compiled from a model's sentence. The compiler is given the goal and the
+    sites, and the flow is checked as every flow is. When it is written, the proposal is
+    compiled. When the model raises, the proposal stands as it was, and the error goes on.
+
+    Returns the flow's path. Raises MiningError when the proposal may not be compiled.
+    """
+    home = config.seeress_home() if home is None else home
+    proposal = remembered(home, name)
+    if proposal.status == "dismissed":
+        raise MiningError(
+            f"{name} was dismissed. To goal it again, in your own words:"
+            f' seeress proposal goal {name} "..."'
+        )
+    if proposal.status not in ("approved", "compiled") or not proposal.goal:
+        raise MiningError(
+            "nothing is compiled from a model's sentence. Write the goal first, in your own"
+            f' words: seeress proposal goal {name} "..."'
+        )
+    path = create_flow(name, description_for(proposal), "personal")
+    record(home, replace(proposal, status="compiled"))
+    return path
 
 
 def schedule_plist(name: str, every_minutes: int | None = None, daily: str | None = None) -> Path:

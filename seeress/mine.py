@@ -1,21 +1,36 @@
-"""The work of `seeress mine`: the record read and mined, a model asked what a pattern may
-be, and a report.
+"""The work of `seeress mine` and of the commands around a proposal.
+
+`mine` reads the record, finds what repeats, asks a model what a pattern may be, and
+reports. `show` shows one proposal, `set_goal` writes the goal in the user's own words,
+which approves it, and `dismiss` sets it aside. `progress` says what was proposed, what was
+compiled and how much each flow ran. It judges nothing.
 
 What reaches a model is a site, an hour and counts: never a path, a title or anything typed.
 And the model is one on this machine, by the guard. So nothing of the record leaves it.
 """
 
 import time
+from collections import Counter
 from collections.abc import Sequence
+from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 from . import miner
-from .activity import Interval, epoch, read_agent_runs, read_events, read_outages
+from .activity import (
+    FlowRun,
+    Interval,
+    epoch,
+    read_agent_runs,
+    read_events,
+    read_flow_runs,
+    read_outages,
+)
 from .brain import chat, endpoint_for, message
 from .config import seeress_home
 from .errors import MiningError
 from .miner import Ask, Candidate, Gap, Session, by_strength
-from .proposals import Proposal, remember
+from .proposals import GOAL_AT_MOST, Proposal, every, record, remember, remembered
 
 # How many candidates a model is asked about, and so how many are proposed. They are the
 # strongest, by days and then by sittings. On a month of invented events with random sites
@@ -136,7 +151,7 @@ def _report(
             key=lambda pair: pair[1].status == "dismissed",
         )
         for candidate, proposal in last:
-            lines.extend(_proposal_lines(candidate, proposal))
+            lines.extend(_proposal_lines(proposal, candidate.paths))
     return "\n".join(lines) + "\n"
 
 
@@ -179,25 +194,112 @@ def _gap_lines(gaps: Sequence[Gap]) -> list[str]:
     return lines
 
 
-def _proposal_lines(candidate: Candidate, proposal: Proposal) -> list[str]:
+def _proposal_lines(proposal: Proposal, paths: Sequence[tuple[str, ...]] | None) -> list[str]:
     """The lines of one proposal: its name and status, its sites, its evidence, and what the
-    model said when it said something."""
+    model said when it said something.
+
+    paths holds one tuple for each site: what was seen there, as the miner found it. A
+    proposal remembered from an earlier run has none to show, for a path is never
+    remembered with it.
+    """
     order = "   the order varies" if proposal.order == "varies" else ""
     seen = sum(proposal.sessions.values())
-    paths = " · ".join(
-        f"{site}: {', '.join(shown)}"
-        for site, shown in zip(proposal.sites, candidate.paths, strict=True)
-    )
     lines = [
         f"{proposal.name}   {proposal.status}{order}",
         f"  sites:  {' → '.join(proposal.sites)}",
         f"  seen:   on {proposal.days} days, in {seen} sittings; first {proposal.first_seen},"
         f" last {proposal.last_seen}; usually at hour {proposal.hour}",
-        f"  paths:  {paths}",
     ]
+    if paths is not None:
+        shown = " · ".join(
+            f"{site}: {', '.join(there)}" for site, there in zip(proposal.sites, paths, strict=True)
+        )
+        lines.append(f"  paths:  {shown}")
     if proposal.goal:
         confidence = (
             f"confidence {proposal.confidence}: " if proposal.confidence is not None else ""
         )
         lines.append(f"  model:  {confidence}{proposal.goal}")
     return lines
+
+
+# ------------------------------------------------------ the proposal commands ---
+
+
+def _home(home: Path | None) -> Path:
+    """The Seeress home: the one given, or the one the settings name."""
+    return seeress_home() if home is None else home
+
+
+def show(name: str, home: Path | None = None) -> str:
+    """One proposal as the report of mine prints it, but without its paths: they are the
+    evidence of the run that found it, and are not remembered with it."""
+    return "\n".join(_proposal_lines(remembered(_home(home), name), None)) + "\n"
+
+
+def set_goal(name: str, goal: str | None = None, home: Path | None = None) -> str:
+    """Write the goal in the user's own words. That approves the proposal.
+
+    A proposal that is compiled stays compiled. Nothing else of it is changed. The goal is
+    1 to 1000 characters once stripped: anything else is refused, and nothing is written.
+    """
+    if goal is None:
+        raise MiningError(f'a goal needs words, in quotes: seeress proposal goal {name} "..."')
+    words = goal.strip()
+    if not 1 <= len(words) <= GOAL_AT_MOST:
+        raise MiningError(
+            f"the goal is {len(words)} characters once stripped. It takes from 1 to {GOAL_AT_MOST}."
+        )
+    home = _home(home)
+    before = remembered(home, name)
+    status = "compiled" if before.status == "compiled" else "approved"
+    record(home, replace(before, goal=words, status=status))
+    return f"Goal saved. To compile it: seeress proposal compile {name}"
+
+
+def dismiss(name: str, home: Path | None = None) -> str:
+    """Set a proposal aside, with its goal as it is. The miner keeps it dismissed."""
+    home = _home(home)
+    record(home, replace(remembered(home, name), status="dismissed"))
+    return f"Dismissed: {name}"
+
+
+def progress(home: Path | None = None) -> str:
+    """What was proposed, what was compiled, and how much each flow ran. It judges nothing.
+
+    A proposal counts by the last line that reads in its file. A flow ran well on a day
+    when one of its runs that day exited 0, and the day is counted once, however many did.
+    """
+    home = _home(home)
+    remembered_all = every(home)
+    counted = Counter(proposal.status for proposal in remembered_all)
+    lines = [
+        f"Proposals: {counted['proposed']} proposed, {counted['approved']} approved,"
+        f" {counted['compiled']} compiled, {counted['dismissed']} dismissed."
+    ]
+    compiled = sorted(
+        (proposal for proposal in remembered_all if proposal.status == "compiled"),
+        key=lambda proposal: proposal.name,
+    )
+    if not compiled:
+        lines.append(
+            'Nothing is compiled. To compile a proposal: seeress proposal goal NAME "...",'
+            " then seeress proposal compile NAME."
+        )
+    runs = read_flow_runs(home)
+    lines.extend(_ran_lines(proposal, runs) for proposal in compiled)
+    return "\n".join(lines) + "\n"
+
+
+def _ran_lines(proposal: Proposal, runs: Sequence[FlowRun]) -> str:
+    """One line on how much the flow of a compiled proposal ran."""
+    days = sorted({run.ts[:10] for run in runs if run.name == proposal.name and run.exit == 0})
+    if not days:
+        return f"{proposal.name}   has never run well"
+    first, last = days[0], days[-1]
+    between = (date.fromisoformat(last) - date.fromisoformat(first)).days
+    apart = "1 day apart" if between == 1 else f"{between} days apart"
+    day_or_days = "day" if len(days) == 1 else "days"
+    return (
+        f"{proposal.name}   ran well on {len(days)} {day_or_days}, from {first} to {last}, {apart}"
+    )

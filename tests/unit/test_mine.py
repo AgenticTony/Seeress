@@ -373,3 +373,248 @@ def test_only_the_strongest_candidates_are_proposed(tmp_path: Path) -> None:
     # Three rituals on as many days and in as many sittings: the alphabet decides.
     assert list(files_of(tmp_path)) == [f"{names('abc')}.jsonl", f"{names('pqr')}.jsonl"]
     assert len(model.prompts) == 1
+
+
+# ------------------------------------------------------ the proposal commands ---
+
+
+def a_proposal(**changes: Any) -> proposals.Proposal:
+    """A proposal with its evidence invented, named after the sites a, b and c."""
+    fields: dict[str, Any] = {
+        "name": names("abc"),
+        "goal": "",
+        "sites": ("a.example", "b.example", "c.example"),
+        "order": "fixed",
+        "days": 3,
+        "sessions": {MONDAY: 1, WEDNESDAY: 1, FRIDAY: 1},
+        "first_seen": at(MONDAY, "09:00:00"),
+        "last_seen": at(FRIDAY, "09:02:00"),
+        "hour": 9,
+        "confidence": None,
+        "status": "proposed",
+    }
+    fields.update(changes)
+    return proposals.Proposal(**fields)
+
+
+def last_of(home: Path, name: str = names("abc")) -> proposals.Proposal:
+    """The proposal remembered last under a name."""
+    kept = files_of(home)[f"{name}.jsonl"]
+    assert kept
+    return kept[-1]
+
+
+def test_show_prints_the_name_the_status_the_sites_the_evidence_and_the_sentence(
+    tmp_path: Path,
+) -> None:
+    proposals.remember(tmp_path, a_proposal(goal="Checks mail.", confidence=4))
+
+    shown = mine.show(names("abc"), tmp_path)
+
+    assert shown.splitlines() == [
+        f"{names('abc')}   proposed",
+        "  sites:  a.example → b.example → c.example",
+        "  seen:   on 3 days, in 3 sittings; first 2026-11-16T09:00:00, last"
+        " 2026-11-20T09:02:00; usually at hour 9",
+        "  model:  confidence 4: Checks mail.",
+    ]
+
+
+def test_show_of_a_proposal_that_is_not_there_refuses_and_names_the_ones_there_are(
+    tmp_path: Path,
+) -> None:
+    proposals.remember(tmp_path, a_proposal())
+
+    with pytest.raises(MiningError) as caught:
+        mine.show("nope", tmp_path)
+
+    reason = str(caught.value)
+    assert "nope" in reason
+    assert names("abc") in reason
+
+
+def test_show_when_no_proposal_was_ever_remembered_says_so(tmp_path: Path) -> None:
+    with pytest.raises(MiningError, match="none"):
+        mine.show("nope", tmp_path)
+
+
+def test_a_goal_in_the_users_own_words_approves_a_proposal(tmp_path: Path) -> None:
+    proposals.remember(tmp_path, a_proposal())
+
+    answer = mine.set_goal(names("abc"), "Check the invoices every morning.", tmp_path)
+
+    assert answer == f"Goal saved. To compile it: seeress proposal compile {names('abc')}"
+    kept = last_of(tmp_path)
+    assert (kept.goal, kept.status) == ("Check the invoices every morning.", "approved")
+    assert len(files_of(tmp_path)[f"{names('abc')}.jsonl"]) == 2
+
+
+@pytest.mark.parametrize("status", ["proposed", "dismissed"])
+def test_a_goal_makes_a_proposal_approved_whatever_it_was(tmp_path: Path, status: str) -> None:
+    proposals.remember(tmp_path, a_proposal(status=status))
+
+    mine.set_goal(names("abc"), "Check.", tmp_path)
+
+    assert last_of(tmp_path).status == "approved"
+
+
+def test_a_goal_on_a_compiled_proposal_is_saved_and_the_proposal_stays_compiled(
+    tmp_path: Path,
+) -> None:
+    proposals.remember(tmp_path, a_proposal(status="compiled", goal="The old words."))
+
+    mine.set_goal(names("abc"), "The new words.", tmp_path)
+
+    kept = last_of(tmp_path)
+    assert (kept.goal, kept.status) == ("The new words.", "compiled")
+
+
+def test_a_goal_changes_no_evidence(tmp_path: Path) -> None:
+    before = a_proposal(days=4, sessions={MONDAY: 2, WEDNESDAY: 1, FRIDAY: 1}, hour=10)
+    proposals.remember(tmp_path, before)
+
+    mine.set_goal(names("abc"), "Check.", tmp_path)
+
+    untouched = replace(before, goal="", status="proposed")
+    assert replace(last_of(tmp_path), goal="", status="proposed") == untouched
+
+
+@pytest.mark.parametrize(
+    "goal",
+    ["", "   ", "x" * 1001],
+    ids=["empty", "whitespace only", "1001 characters"],
+)
+def test_a_goal_that_is_no_goal_is_refused_and_nothing_is_written(
+    tmp_path: Path, goal: str
+) -> None:
+    proposals.remember(tmp_path, a_proposal())
+
+    with pytest.raises(MiningError, match="goal"):
+        mine.set_goal(names("abc"), goal, tmp_path)
+
+    assert len(files_of(tmp_path)[f"{names('abc')}.jsonl"]) == 1
+
+
+def test_a_goal_is_stripped_of_its_ends(tmp_path: Path) -> None:
+    proposals.remember(tmp_path, a_proposal())
+
+    mine.set_goal(names("abc"), "  Check the invoices.\n", tmp_path)
+
+    assert last_of(tmp_path).goal == "Check the invoices."
+
+
+def test_a_goal_of_1000_characters_stands(tmp_path: Path) -> None:
+    proposals.remember(tmp_path, a_proposal())
+
+    mine.set_goal(names("abc"), "x" * 1000, tmp_path)
+
+    assert last_of(tmp_path).goal == "x" * 1000
+
+
+def test_dismiss_makes_a_proposal_dismissed_and_keeps_its_goal(tmp_path: Path) -> None:
+    proposals.remember(tmp_path, a_proposal(goal="A sentence."))
+
+    answer = mine.dismiss(names("abc"), tmp_path)
+
+    assert answer == f"Dismissed: {names('abc')}"
+    kept = last_of(tmp_path)
+    assert (kept.status, kept.goal) == ("dismissed", "A sentence.")
+
+
+@pytest.mark.parametrize("status", ["approved", "compiled"])
+def test_a_proposal_the_user_approved_or_compiled_can_be_dismissed_all_the_same(
+    tmp_path: Path, status: str
+) -> None:
+    """A decision is the user's to take back."""
+    proposals.remember(tmp_path, a_proposal(status=status, goal="The user's words."))
+
+    mine.dismiss(names("abc"), tmp_path)
+
+    assert last_of(tmp_path).status == "dismissed"
+
+
+def test_dismiss_of_a_proposal_that_is_not_there_refuses(tmp_path: Path) -> None:
+    with pytest.raises(MiningError, match="no proposal"):
+        mine.dismiss("nope", tmp_path)
+
+
+# ------------------------------------------------------------------ progress ---
+
+
+def test_progress_counts_proposals_by_status(tmp_path: Path) -> None:
+    for site, status in zip("abcd", ["dismissed", "proposed", "compiled", "approved"], strict=True):
+        name = names(site)
+        proposals.remember(
+            tmp_path, a_proposal(name=name, sites=(f"{site}.example",), status=status)
+        )
+
+    assert "Proposals: 1 proposed, 1 approved, 1 compiled, 1 dismissed." in mine.progress(tmp_path)
+
+
+def test_progress_prints_the_days_a_compiled_flow_ran_well_on(tmp_path: Path) -> None:
+    """A day is counted once, however many good runs it had. A failed run is no day."""
+    proposals.remember(tmp_path, a_proposal(status="compiled", goal="Check."))
+    write(
+        tmp_path,
+        "flow-runs.jsonl",
+        {"ts": at(MONDAY, "09:00:00"), "name": names("abc"), "exit": 0},
+        {"ts": at(TUESDAY, "09:00:00"), "name": names("abc"), "exit": 0},
+        {"ts": at(TUESDAY, "10:00:00"), "name": names("abc"), "exit": 0},
+        {
+            "ts": at(WEDNESDAY, "09:00:00"),
+            "name": names("abc"),
+            "exit": 1,
+            "error": "BrowserError",
+        },
+        {"ts": at(SATURDAY, "09:00:00"), "name": names("xyz"), "exit": 0},
+    )
+
+    shown = mine.progress(tmp_path)
+
+    assert (
+        f"{names('abc')}   ran well on 2 days, from 2026-11-16 to 2026-11-17, 1 day apart" in shown
+    )
+    assert names("xyz") not in shown
+
+
+def test_progress_counts_the_days_between_the_first_and_the_last(tmp_path: Path) -> None:
+    proposals.remember(tmp_path, a_proposal(status="compiled", goal="Check."))
+    write(
+        tmp_path,
+        "flow-runs.jsonl",
+        {"ts": at(MONDAY, "09:00:00"), "name": names("abc"), "exit": 0},
+        {"ts": at(SATURDAY, "09:00:00"), "name": names("abc"), "exit": 0},
+    )
+
+    shown = mine.progress(tmp_path)
+
+    assert "from 2026-11-16 to 2026-11-21, 5 days apart" in shown
+
+
+def test_progress_says_when_a_compiled_flow_has_never_run_well(tmp_path: Path) -> None:
+    proposals.remember(tmp_path, a_proposal(status="compiled", goal="Check."))
+
+    assert f"{names('abc')}   has never run well" in mine.progress(tmp_path)
+
+
+def test_progress_says_when_nothing_is_compiled_and_how_to_compile(tmp_path: Path) -> None:
+    proposals.remember(tmp_path, a_proposal(status="approved", goal="Check."))
+
+    shown = mine.progress(tmp_path)
+
+    assert "Nothing is compiled." in shown
+    assert 'seeress proposal goal NAME "...", then seeress proposal compile NAME' in shown
+
+
+def test_progress_when_no_proposal_was_ever_remembered(tmp_path: Path) -> None:
+    shown = mine.progress(tmp_path)
+
+    assert "Proposals: 0 proposed, 0 approved, 0 compiled, 0 dismissed." in shown
+    assert "Nothing is compiled." in shown
+
+
+def test_a_file_of_which_no_line_reads_is_not_counted(tmp_path: Path) -> None:
+    file = proposals.folder(tmp_path) / f"{names('abc')}.jsonl"
+    file.write_text("this line does not read\n", encoding="utf-8")
+
+    assert "Proposals: 0 proposed, 0 approved, 0 compiled, 0 dismissed." in mine.progress(tmp_path)

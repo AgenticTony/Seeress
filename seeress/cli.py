@@ -31,6 +31,11 @@ COMMANDS_HELP = """Seeress: your personal browser agent.
   seeress watch-start | watch-stop        the activity logger
   seeress watch-analyze [--hours N] [--no-llm]
   seeress mine [--hours N] [--no-llm]     what repeats in the record, as proposals
+  seeress proposal show NAME              the evidence, and what the model thinks the task is
+  seeress proposal goal NAME "..."        your own words for the goal. This approves it
+  seeress proposal compile NAME           the agent writes the flow, on the personal door
+  seeress proposal dismiss NAME           set a proposal aside
+  seeress progress                       what was proposed, compiled and run
 
 --profile personal or client selects the door. It goes before or after the command, and
 beats SEERESS_PROFILE, which beats the default.
@@ -167,6 +172,30 @@ def _mine(argv: Sequence[str]) -> int:
     return 0
 
 
+def _proposal(argv: Sequence[str]) -> int:
+    parser = _parser("proposal")
+    parser.add_argument("action", choices=("show", "goal", "dismiss", "compile"))
+    parser.add_argument("name")
+    parser.add_argument("goal", nargs="?", default=None, help="the goal, in quotes")
+    args = parser.parse_args(argv)
+    if args.action == "show":
+        print(mine.show(args.name))
+    elif args.action == "goal":
+        print(mine.set_goal(args.name, args.goal))
+    elif args.action == "dismiss":
+        print(mine.dismiss(args.name))
+    else:
+        print(flows.compile_proposal(None, args.name))
+        print(f"Run it with: seeress run {args.name}")
+    return 0
+
+
+def _progress(argv: Sequence[str]) -> int:
+    _parser("progress").parse_args(argv)
+    print(mine.progress())
+    return 0
+
+
 COMMANDS: dict[str, Command] = {
     "chat": _chat,
     "run": _run,
@@ -178,6 +207,8 @@ COMMANDS: dict[str, Command] = {
     "watch-stop": _watch_stop,
     "watch-analyze": _watch_analyze,
     "mine": _mine,
+    "proposal": _proposal,
+    "progress": _progress,
 }
 
 

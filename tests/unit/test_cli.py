@@ -264,6 +264,87 @@ def test_the_help_of_the_whole_tool_lists_every_command(capsys: pytest.CaptureFi
         assert command in out
 
 
+def test_the_proposal_commands_and_progress_reach_the_work_and_print_what_it_returns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: list[tuple[object, ...]] = []
+
+    def show(name: str, home: Path | None = None) -> str:
+        seen.append(("show", name, home))
+        return "shown"
+
+    def set_goal(name: str, goal: str, home: Path | None = None) -> str:
+        seen.append(("goal", name, goal, home))
+        return "saved"
+
+    def dismiss(name: str, home: Path | None = None) -> str:
+        seen.append(("dismiss", name, home))
+        return "dismissed"
+
+    def progress(home: Path | None = None) -> str:
+        seen.append(("progress", home))
+        return "the progress"
+
+    def compile_proposal(home: Path | None, name: str) -> Path:
+        seen.append(("compile", home, name))
+        return Path("/flows/check.py")
+
+    monkeypatch.setattr(mine, "show", show)
+    monkeypatch.setattr(mine, "set_goal", set_goal)
+    monkeypatch.setattr(mine, "dismiss", dismiss)
+    monkeypatch.setattr(mine, "progress", progress)
+    monkeypatch.setattr(flows, "compile_proposal", compile_proposal)
+
+    assert cli.main(["proposal", "show", "check"]) == 0
+    assert cli.main(["proposal", "goal", "check", "in your own words"]) == 0
+    assert cli.main(["proposal", "dismiss", "check"]) == 0
+    assert cli.main(["proposal", "compile", "check"]) == 0
+    assert cli.main(["progress"]) == 0
+
+    assert seen == [
+        ("show", "check", None),
+        ("goal", "check", "in your own words", None),
+        ("dismiss", "check", None),
+        ("compile", None, "check"),
+        ("progress", None),
+    ]
+    assert capsys.readouterr().out == (
+        "shown\nsaved\ndismissed\n/flows/check.py\nRun it with: seeress run check\nthe progress\n"
+    )
+
+
+def test_a_proposal_command_that_refuses_exits_one_with_the_reason(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Nothing is remembered under the throwaway home of the test."""
+    assert cli.main(["proposal", "show", "nope"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "seeress error: " in captured.err
+    assert "no proposal" in captured.err
+
+
+def test_a_goal_with_no_words_on_the_command_line_exits_one(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["proposal", "goal", "check"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "goal" in captured.err
+
+
+def test_an_action_of_proposal_that_does_not_exist_is_refused(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["proposal", "approve", "check"])
+
+    assert exit_info.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("error", ERRORS, ids=lambda error: type(error).__name__)
 @pytest.mark.parametrize(
     "argv", [["run", "alpha"], ["create-flow", "a", "b"], ["schedule", "a"], ["do", "a", "thing"]]

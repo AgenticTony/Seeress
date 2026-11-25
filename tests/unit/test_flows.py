@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from seeress import activity, agent, bodies, browser_api, config, flows
-from seeress.errors import BrowserError, FlowError, UnsafeCodeError
+from seeress import activity, agent, bodies, browser_api, config, flows, proposals
+from seeress.errors import BrowserError, FlowError, MiningError, UnsafeCodeError
 from seeress.runner import StepResult
 from tests.conftest import Patcher
 
@@ -378,3 +378,155 @@ def test_a_time_that_is_not_a_time_is_refused(home: Path, daily: str) -> None:
 def test_every_zero_minutes_is_refused(home: Path) -> None:
     with pytest.raises(FlowError, match="at least 1"):
         flows.schedule_plist("alpha", every_minutes=0)
+
+
+# ---------------------------------------------------- compiling a proposal ---
+
+NAME = proposals.name_for(["a.example", "b.example", "c.example"])
+
+
+def a_proposal(**changes: object) -> proposals.Proposal:
+    """A proposal with its evidence invented, named after the sites a, b and c."""
+    fields: dict[str, object] = {
+        "name": NAME,
+        "goal": "",
+        "sites": ("a.example", "b.example", "c.example"),
+        "order": "fixed",
+        "days": 3,
+        "sessions": {"2026-11-16": 1, "2026-11-18": 1, "2026-11-20": 1},
+        "first_seen": "2026-11-16T09:00:00",
+        "last_seen": "2026-11-20T09:02:00",
+        "hour": 9,
+        "confidence": None,
+        "status": "proposed",
+    }
+    fields.update(changes)
+    return proposals.Proposal(**fields)  # type: ignore[arg-type]
+
+
+def remembered() -> list[proposals.Proposal]:
+    """Every line of the proposal's file that reads."""
+    file = config.seeress_home() / "proposals" / f"{NAME}.jsonl"
+    text = file.read_text(encoding="utf-8")
+    return [proposals.Proposal.parse(json.loads(line)) for line in text.splitlines()]
+
+
+def asked(wired: Wire) -> str:
+    """The one thing the compiler was asked."""
+    (turn,) = [turn for turn in wired.chats[0] if turn["role"] == "user"]
+    return turn["content"]
+
+
+def test_compile_refuses_a_proposal_that_is_only_proposed_and_names_the_command(
+    flows_dir: Path, wired: Wire
+) -> None:
+    """Nothing is compiled from a model's sentence."""
+    proposals.remember(config.seeress_home(), a_proposal(goal="A model's sentence."))
+
+    with pytest.raises(MiningError, match=f"seeress proposal goal {NAME}"):
+        flows.compile_proposal(config.seeress_home(), NAME)
+
+    assert wired.calls == []
+    assert list(flows_dir.iterdir()) == []
+
+
+def test_compile_refuses_a_dismissed_proposal_and_says_how_to_goal_it_again(
+    flows_dir: Path, wired: Wire
+) -> None:
+    proposals.remember(
+        config.seeress_home(), a_proposal(status="dismissed", goal="The user's words.")
+    )
+
+    with pytest.raises(MiningError, match="dismissed") as caught:
+        flows.compile_proposal(config.seeress_home(), NAME)
+
+    assert f"seeress proposal goal {NAME}" in str(caught.value)
+    assert wired.calls == []
+
+
+def test_compile_refuses_an_approved_proposal_whose_goal_is_empty(
+    flows_dir: Path, wired: Wire
+) -> None:
+    proposals.remember(config.seeress_home(), a_proposal(status="approved", goal=""))
+
+    with pytest.raises(MiningError, match="goal"):
+        flows.compile_proposal(config.seeress_home(), NAME)
+
+    assert wired.calls == []
+
+
+def test_compile_of_a_proposal_that_is_not_there_refuses(flows_dir: Path, wired: Wire) -> None:
+    with pytest.raises(MiningError, match="no proposal"):
+        flows.compile_proposal(config.seeress_home(), NAME)
+
+    assert wired.calls == []
+
+
+def test_compile_writes_the_flow_on_the_personal_door_from_the_goal_and_the_sites(
+    flows_dir: Path, wired: Wire
+) -> None:
+    proposals.remember(
+        config.seeress_home(),
+        a_proposal(status="approved", goal="Check the invoices every morning."),
+    )
+    wired.replies = [FINAL]
+
+    path = flows.compile_proposal(config.seeress_home(), NAME)
+
+    assert path == flows_dir / f"{NAME}.py"
+    assert wired.calls[0] == "door:personal"
+    assert asked(wired) == (
+        f"Write a flow named {NAME!r} that: Check the invoices every morning. "
+        "The task visits these sites, in this order: a.example → b.example → c.example."
+    )
+    assert remembered()[-1].status == "compiled"
+
+
+def test_the_description_of_a_proposal_whose_order_varies_lists_its_sites(
+    flows_dir: Path, wired: Wire
+) -> None:
+    proposals.remember(
+        config.seeress_home(),
+        a_proposal(status="approved", goal="Check.", order="varies"),
+    )
+    wired.replies = [FINAL]
+
+    flows.compile_proposal(config.seeress_home(), NAME)
+
+    assert asked(wired) == (
+        f"Write a flow named {NAME!r} that: Check. "
+        "The task uses these sites: a.example, b.example, c.example."
+    )
+
+
+def test_the_description_is_the_goal_and_one_sentence_and_nothing_else() -> None:
+    description = flows.description_for(a_proposal(goal="Check."))
+
+    assert description == (
+        "Check. The task visits these sites, in this order: a.example → b.example → c.example."
+    )
+    assert "2026" not in description
+    assert "hour" not in description
+
+
+def test_a_compiled_proposal_is_compiled_again_when_asked(flows_dir: Path, wired: Wire) -> None:
+    proposals.remember(config.seeress_home(), a_proposal(status="compiled", goal="Check."))
+    wired.replies = [FINAL]
+
+    flows.compile_proposal(config.seeress_home(), NAME)
+
+    assert (flows_dir / f"{NAME}.py").is_file()
+    assert remembered()[-1].status == "compiled"
+
+
+def test_when_the_flow_cannot_be_written_the_proposal_stands_and_the_error_goes_on(
+    flows_dir: Path, wired: Wire
+) -> None:
+    proposals.remember(config.seeress_home(), a_proposal(status="approved", goal="Check."))
+    wired.replies = [BAD_FINAL]
+
+    with pytest.raises(FlowError, match="does not allow"):
+        flows.compile_proposal(config.seeress_home(), NAME)
+
+    assert remembered()[-1].status == "approved"
+    assert list(flows_dir.iterdir()) == []
