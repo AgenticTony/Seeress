@@ -2509,3 +2509,191 @@ def test_a_settings_file_seeress_cannot_read_is_refused_by_the_entry_point(
     assert capture.main(["ws://127.0.0.1:9/x", "--home", str(tmp_path), "--seconds", "0.1"]) == 1
 
     assert "keep_days" in capsys.readouterr().err
+
+
+# ------------------------------------------ what the seventh review found no test held ---
+
+
+class Closing(Standing):
+    """Standing, which counts how often it is asked to close its connection."""
+
+    closed: ClassVar[int] = 0
+
+    async def close(self) -> None:
+        Closing.closed += 1
+
+
+class SlowToClose(Standing):
+    """Standing, which takes half a second to close its connection."""
+
+    async def close(self) -> None:
+        await asyncio.sleep(0.5)
+
+
+NOWHERE = "ws://127.0.0.1:9/devtools/browser/none"
+
+
+def test_the_connection_is_closed_when_the_capture_ends(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each reconnect leaked a websocket until it was collected."""
+    Closing.closed = 0
+    closing = Closing()
+    monkeypatch.setattr(capture, "connect", closing)
+    recorder = capture.Recorder(NOWHERE, lambda event: None)
+    recorder.start()
+    try:
+        awaited(closing.let_in.is_set)
+    finally:
+        recorder.stop()
+
+    assert Closing.closed == 1
+
+
+def test_the_loop_of_the_recorder_is_closed_when_the_capture_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A selector and a descriptor leaked per capture."""
+    monkeypatch.setattr(capture, "connect", Standing())
+    made: list[asyncio.AbstractEventLoop] = []
+    new_loop = asyncio.new_event_loop
+
+    def noted() -> asyncio.AbstractEventLoop:
+        made.append(new_loop())
+        return made[-1]
+
+    monkeypatch.setattr(asyncio, "new_event_loop", noted)
+    recorder = capture.Recorder(NOWHERE, lambda event: None)
+    recorder.start()
+    try:
+        awaited(lambda: made and made[0].is_running())
+    finally:
+        recorder.stop()
+
+    assert len(made) == 1 and made[0].is_closed()
+
+
+def test_with_no_home_given_the_review_reads_where_seeress_home_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SEERESS_HOME moves the Seeress home, and the commands of the record follow it. Read
+    under the home folder instead, they spoke of another record."""
+    elsewhere, home_folder = tmp_path / "elsewhere", tmp_path / "home"
+    written(elsewhere, "20261027", "click")
+    monkeypatch.setenv("SEERESS_HOME", str(elsewhere))
+    monkeypatch.setattr(Path, "home", lambda: home_folder)
+
+    (line, _) = capture.review(today=TODAY).splitlines()
+
+    assert line.startswith("2026-10-27   1 event")
+
+
+def test_the_logger_s_gate_takes_its_schedule_from_the_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The settings name the schedule. A gate left on the default recorded outside the
+    hours a person chose, and not in all of them."""
+    (tmp_path / "config.toml").write_text(
+        '[capture]\nfrom = "22:00"\nto = "24:00"\n', encoding="utf-8"
+    )
+    schedules: list[object] = []
+
+    class Noted(capture.Gate):
+        def __init__(
+            self,
+            home: Path,
+            *,
+            schedule: activity.Schedule = activity.DEFAULT_SCHEDULE,
+            status: capture.Status | None = None,
+        ) -> None:
+            super().__init__(home, schedule=schedule, status=status)
+            schedules.append(schedule)
+
+    monkeypatch.setattr(capture, "Gate", Noted)
+    Refused.made.clear()
+    clock = Clock()
+    monkeypatch.setattr(capture, "Recorder", Refused)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    capture.run("ws://127.0.0.1:9/devtools/browser/one", home=tmp_path, seconds=16, stop=clock)
+
+    assert schedules == [config.CaptureSettings(start=22, end=23).schedule]
+
+
+def test_the_logger_keeps_the_days_the_settings_say(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "config.toml").write_text("[capture]\nkeep_days = 7\n", encoding="utf-8")
+    kept: list[tuple[Path, int]] = []
+
+    def retention(home: Path, days: int) -> list[Path]:
+        kept.append((home, days))
+        return []
+
+    monkeypatch.setattr(capture, "retention", retention)
+    standing = Standing()
+    monkeypatch.setattr(capture, "connect", standing)
+    stop = threading.Event()
+    said: list[int] = []
+    logger = threading.Thread(
+        target=lambda: said.append(capture.run(NOWHERE, home=tmp_path, stop=stop))
+    )
+    logger.start()
+    try:
+        awaited(standing.let_in.is_set)
+        awaited(lambda: kept)
+    finally:
+        stop.set()
+        logger.join(10)
+
+    assert kept == [(tmp_path, 7)]
+
+
+def test_stop_waits_for_the_thread_of_the_capture_however_long_it_takes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stop returns when the capture has ended, and not before. One that waited for a
+    moment only returned with the capture still closing its connection."""
+    slow = SlowToClose()
+    monkeypatch.setattr(capture, "connect", slow)
+    recorder = capture.Recorder(NOWHERE, lambda event: None)
+    recorder.start()
+    try:
+        awaited(slow.let_in.is_set)
+    finally:
+        recorder.stop()
+
+    assert recorder.running is False
+
+
+def test_no_path_of_the_record_reaches_the_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A log is not the record: it has none of the record's protection, retention or
+    forget. What the capture writes of an event is a count."""
+    caplog.set_level(logging.DEBUG, logger="seeress")
+    all_day = activity.Schedule(frozenset({0, 1, 2, 3, 4, 5, 6}), 0, 23)
+    gate = capture.Gate(tmp_path, schedule=all_day, status=capture.Status(tmp_path))
+    event = activity.Event(
+        1, "2026-11-20T09:15:00", "click", "example.org", "/private/invoices/7", T1[:8]
+    )
+
+    passed(gate, [event])
+
+    assert "/private/invoices/7" not in caplog.text
+
+
+def test_the_handlers_there_were_are_put_back_as_they_were(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller's own handler, and not the default one."""
+
+    def mine(*_: object) -> None:
+        return None
+
+    monkeypatch.setattr(capture, "connect", Standing())
+    before = signal.getsignal(signal.SIGHUP)
+    signal.signal(signal.SIGHUP, mine)
+    try:
+        capture.main([NOWHERE, "--home", str(tmp_path), "--seconds", "0"])
+        assert signal.getsignal(signal.SIGHUP) is mine
+    finally:
+        signal.signal(signal.SIGHUP, before)
