@@ -136,6 +136,9 @@ class Candidate:
 
     paths holds one tuple per site: the paths seen at that step, most common first and at
     most three, with their identifier-like segments replaced by {}.
+
+    order is "fixed" when the sites recur in this order, and "varies" when they recur as a
+    set, in any order.
     """
 
     sites: tuple[str, ...]
@@ -145,6 +148,7 @@ class Candidate:
     first_seen: str
     last_seen: str
     hour: int
+    order: str = "fixed"
 
 
 def recurring(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
@@ -175,8 +179,15 @@ def recurring(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
                 occurrences.setdefault(block, []).append((index, position))
     found = [_candidate(block, where, sittings, visits) for block, where in occurrences.items()]
     kept = [candidate for candidate in found if not _covered(candidate, found)]
+    return by_strength(kept)
+
+
+def by_strength(candidates: Sequence[Candidate]) -> list[Candidate]:
+    """The candidates most days first. Where two were seen on as many days, the one seen in
+    more sittings. Where those are equal too, the one whose sites come first alphabetically.
+    """
     return sorted(
-        kept,
+        candidates,
         key=lambda candidate: (
             -candidate.days,
             -sum(candidate.sessions.values()),
@@ -291,6 +302,108 @@ def _masked(path: str) -> str:
 
 def _is_identifier(segment: str) -> bool:
     return any(shape.fullmatch(segment) for shape in (_NUMBER, _UUID, _HEX))
+
+
+# ------------------------------------------------ rituals whose order varies ---
+
+
+def clusters(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
+    """The sets of two to six sites that turn up together in sittings on at least days
+    different days, in any order, strongest first.
+
+    A sitting holds a set when every site of the set is among its sites. A set that another
+    found set holds whole is left out. The sites come by how many of all the sittings hold
+    each one, and alphabetically where two tie. The evidence is counted over the sittings
+    that hold the whole set.
+
+    The sets are found level by level, and each level is built only from the sets of the
+    level before it: a pair is looked for only when both of its sites are found on their
+    own. That is what keeps a month of record from asking after every set there could be.
+    """
+    if not sittings:
+        return []
+    # Which sittings hold each site, as one bit per sitting. The sittings that hold a set
+    # are then those where the bits of all its sites agree, and a day counts when one of its
+    # sittings is among them.
+    holding: dict[str, int] = {}
+    of_day: dict[str, int] = {}
+    for index, sitting in enumerate(sittings):
+        bit = 1 << index
+        of_day[sitting.day] = of_day.get(sitting.day, 0) | bit
+        for site in {visit.site for visit in sitting.events}:
+            holding[site] = holding.get(site, 0) | bit
+    day_bits = list(of_day.values())
+
+    def found_often_enough(sitters: int) -> bool:
+        return sum(1 for day in day_bits if day & sitters) >= days
+
+    # A set is a tuple of its sites in alphabetical order, with the bits of its sittings.
+    every: list[tuple[tuple[str, ...], int]] = [
+        ((site,), sitters)
+        for site, sitters in sorted(holding.items())
+        if found_often_enough(sitters)
+    ]
+    level = every
+    while level and len(level[0][0]) < MOST_SITES:
+        joined: list[tuple[tuple[str, ...], int]] = []
+        # Two found sets that differ only in their last site make one candidate, a site
+        # longer. So each pair is joined once.
+        by_head: dict[tuple[str, ...], list[tuple[str, int]]] = {}
+        for sites, sitters in level:
+            by_head.setdefault(sites[:-1], []).append((sites[-1], sitters))
+        for head, members in by_head.items():
+            for position, (last, first_sitters) in enumerate(members):
+                for other, second_sitters in members[position + 1 :]:
+                    sitters = first_sitters & second_sitters
+                    if found_often_enough(sitters):
+                        joined.append(((*head, last, other), sitters))
+        every.extend(joined)
+        level = joined
+
+    # Of the found sets, only the largest: the longest first, so that a part finds a whole
+    # to be held by.
+    largest: list[tuple[frozenset[str], int]] = []
+    for sites, sitters in sorted(every, key=lambda item: (-len(item[0]), item[0])):
+        whole = frozenset(sites)
+        if all(not whole < found for found, _ in largest):
+            largest.append((whole, sitters))
+    found = [_cluster(whole, sitters, sittings, holding) for whole, sitters in largest]
+    return by_strength(found)
+
+
+def _cluster(
+    whole: frozenset[str],
+    sitters: int,
+    sittings: Sequence[Session],
+    holding: Mapping[str, int],
+) -> Candidate:
+    """The candidate for one found set, with its evidence counted over the sittings that
+    hold it."""
+    held = [sitting for index, sitting in enumerate(sittings) if sitters >> index & 1]
+    per_day: Counter[str] = Counter(sitting.day for sitting in held)
+    hours: Counter[int] = Counter()
+    paths: dict[str, Counter[str]] = {site: Counter() for site in whole}
+    for sitting in held:
+        hours[_hour_of_first(sitting, whole)] += 1
+        for event in sitting.events:
+            if event.site in paths:
+                paths[event.site][_masked(event.path)] += 1
+    ordered = sorted(whole, key=lambda site: (-holding[site].bit_count(), site))
+    return Candidate(
+        tuple(ordered),
+        tuple(_most_common(paths[site]) for site in ordered),
+        len(per_day),
+        dict(sorted(per_day.items())),
+        min(sitting.start for sitting in held),
+        max(sitting.end for sitting in held),
+        _most_common_hour(hours),
+        "varies",
+    )
+
+
+def _hour_of_first(sitting: Session, whole: frozenset[str]) -> int:
+    """The hour of the earliest event of one of the set's sites in the sitting."""
+    return next(int(event.ts[11:13]) for event in sitting.events if event.site in whole)
 
 
 # ------------------------------------------------------------------- the gaps ---
@@ -417,3 +530,8 @@ def _in_schedule(span: Interval, schedule: Schedule) -> list[Interval]:
                 parts.append(Interval(start, end))
         day = _next_midnight(day)
     return parts
+
+
+def scheduled(start: float, end: float, schedule: Schedule = DEFAULT_SCHEDULE) -> float:
+    """How many seconds of the time from start to end fall in the schedule."""
+    return sum(part.end - part.start for part in _in_schedule(Interval(start, end), schedule))

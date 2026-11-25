@@ -499,6 +499,186 @@ def test_no_session_is_no_candidate() -> None:
     assert miner.recurring([]) == []
 
 
+def test_a_candidate_of_a_sequence_is_fixed() -> None:
+    events = [event for day in THREE_DAYS for event in sitting(day, "abc")]
+
+    (found,) = miner.recurring(miner.sessions(events))
+
+    assert found.order == "fixed"
+
+
+# ------------------------------------------------ rituals whose order varies ---
+
+
+def test_a_b_c_in_three_orders_on_three_days_is_one_cluster_and_no_sequence() -> None:
+    """The plan's test. What recurred is the set of three sites, not their order."""
+    sittings = miner.sessions(
+        sitting(MONDAY, "abc") + sitting(WEDNESDAY, "cba") + sitting(FRIDAY, "bac")
+    )
+
+    assert miner.recurring(sittings) == []
+    found = miner.clusters(sittings)
+
+    assert [(cluster.sites, cluster.order, cluster.days) for cluster in found] == [
+        (("a", "b", "c"), "varies", 3)
+    ]
+
+
+def test_a_set_seen_on_fewer_days_than_asked_is_not_found() -> None:
+    sittings = miner.sessions(sitting(MONDAY, "abc") + sitting(TUESDAY, "abc"))
+
+    assert miner.clusters(sittings) == []
+    assert [cluster.sites for cluster in miner.clusters(sittings, days=2)] == [("a", "b", "c")]
+
+
+def test_a_set_contained_in_a_found_set_is_not_returned() -> None:
+    sittings = miner.sessions(
+        sitting(MONDAY, "abc") + sitting(WEDNESDAY, "abc") + sitting(FRIDAY, "abcx")
+    )
+
+    found = miner.clusters(sittings)
+
+    assert [cluster.sites for cluster in found] == [("a", "b", "c")]
+
+
+def test_a_set_of_seven_sites_is_never_looked_for() -> None:
+    """What is found of it is its seven sets of six."""
+    events = [event for day in THREE_DAYS for event in sitting(day, "abcdefg")]
+
+    found = miner.clusters(miner.sessions(events))
+
+    assert len(found) == 7
+    assert {len(cluster.sites) for cluster in found} == {6}
+    assert sorted({site for cluster in found for site in cluster.sites}) == list("abcdefg")
+
+
+def test_the_sites_of_a_cluster_come_by_how_many_sittings_hold_them() -> None:
+    """b is in six sittings and a in three. Where two are held alike, alphabetically."""
+    events = [
+        event
+        for day, hour, sites in (
+            (MONDAY, 9, "bxa"),
+            (WEDNESDAY, 9, "ab"),
+            (FRIDAY, 9, "ba"),
+            (MONDAY, 14, "b"),
+            (WEDNESDAY, 14, "b"),
+            (FRIDAY, 14, "b"),
+        )
+        for event in sitting(day, sites, hour)
+    ]
+
+    (found,) = miner.clusters(miner.sessions(events))
+
+    assert found.sites == ("b", "a")
+
+
+def test_a_cluster_is_counted_over_the_sittings_that_hold_the_whole_set() -> None:
+    """A sitting that holds a alone, and one of another site, count for nothing."""
+    events = [
+        event
+        for day, hour, sites in (
+            (MONDAY, 9, "abc"),
+            (WEDNESDAY, 11, "abc"),
+            (FRIDAY, 9, "abc"),
+            (MONDAY, 14, "a"),
+            (TUESDAY, 9, "x"),
+        )
+        for event in sitting(day, sites, hour)
+    ]
+
+    (found,) = miner.clusters(miner.sessions(events))
+
+    assert found.days == 3
+    assert dict(found.sessions) == {MONDAY: 1, WEDNESDAY: 1, FRIDAY: 1}
+    assert (found.first_seen, found.last_seen) == (at(MONDAY, "09:00:00"), at(FRIDAY, "09:02:00"))
+    assert found.hour == 9
+
+
+def test_the_hour_of_a_cluster_is_that_of_its_first_site_in_each_sitting() -> None:
+    """In two sittings a site outside the set comes first, in the hour before the set."""
+    events = [
+        event
+        for day in (MONDAY, FRIDAY)
+        for event in (
+            visit("x", at(day, "08:59:00")),
+            visit("a", at(day, "09:00:00")),
+            visit("b", at(day, "09:01:00")),
+            visit("c", at(day, "09:02:00")),
+        )
+    ]
+    events += sitting(WEDNESDAY, "abc", 11)
+
+    (found,) = miner.clusters(miner.sessions(events))
+
+    assert found.hour == 9
+
+
+def test_the_paths_of_a_cluster_are_those_of_its_sites_in_those_sittings() -> None:
+    events = [
+        event
+        for day, number in zip(THREE_DAYS, (7, 8, 9), strict=True)
+        for event in (
+            visit("a", at(day, "09:00:00")),
+            visit("b", at(day, "09:01:00"), f"/b/{number}/x"),
+            visit("b", at(day, "09:02:00"), "/b/list"),
+            visit("c", at(day, "09:03:00")),
+        )
+    ]
+    # A sitting that holds b alone: its path is not the cluster's. It does make b the site
+    # that most sittings hold, so b comes first.
+    events.append(visit("b", at(MONDAY, "14:00:00"), "/b/elsewhere"))
+
+    (found,) = miner.clusters(miner.sessions(events))
+
+    assert found.sites == ("b", "a", "c")
+    assert found.paths == (("/b/list", "/b/{}/x"), ("/",), ("/",))
+
+
+def test_clusters_come_most_days_first_then_most_sittings_then_alphabetically() -> None:
+    """Four rituals, each in its own hours so that no sitting holds two of them. `jk` is on
+    the most days, `hi` in the most sittings, and `fg` is found before `cde` but comes after
+    it in the alphabet."""
+    events = [
+        *(event for day in THREE_DAYS for event in sitting(day, "cde", 9)),
+        *(event for day in THREE_DAYS for event in sitting(day, "fg", 11)),
+        *(event for day in THREE_DAYS for event in sitting(day, "hi", 13)),
+        *(event for day in (MONDAY, WEDNESDAY) for event in sitting(day, "hi", 15)),
+        *(event for day in (*THREE_DAYS, TUESDAY) for event in sitting(day, "jk", 17)),
+    ]
+
+    found = miner.clusters(miner.sessions(events))
+
+    assert [(cluster.sites, cluster.days, sum(cluster.sessions.values())) for cluster in found] == [
+        (("j", "k"), 4, 4),
+        (("h", "i"), 3, 5),
+        (("c", "d", "e"), 3, 3),
+        (("f", "g"), 3, 3),
+    ]
+
+
+def test_no_sitting_is_no_cluster() -> None:
+    assert miner.clusters([]) == []
+
+
+def test_a_cluster_counts_days_and_not_sittings() -> None:
+    events = sitting(MONDAY, "abc", 9) + sitting(MONDAY, "abc", 14) + sitting(WEDNESDAY, "abc")
+
+    found = miner.clusters(miner.sessions(events), days=2)
+
+    assert [(cluster.days, dict(cluster.sessions)) for cluster in found] == [
+        (2, {MONDAY: 2, WEDNESDAY: 1})
+    ]
+
+
+def test_a_cluster_does_not_depend_on_the_order_the_sittings_come_in() -> None:
+    friday = miner.sessions(sitting(FRIDAY, "abc", 15))
+    monday = miner.sessions(sitting(MONDAY, "abc", 9))
+
+    (found,) = miner.clusters([*friday, *monday], days=2)
+
+    assert (found.first_seen, found.last_seen) == (at(MONDAY, "09:00:00"), at(FRIDAY, "15:02:00"))
+
+
 # ------------------------------------------------------------------- the gaps ---
 
 
@@ -601,6 +781,20 @@ def test_a_schedule_of_the_users_own_is_used() -> None:
     found = miner.gaps(events, [], now=activity.epoch(at(TUESDAY, "12:00:00")), schedule=schedule)
 
     assert found == [miner.Gap(at(TUESDAY, "09:00:00"), at(TUESDAY, "12:00:00"), 180, "silent")]
+
+
+def test_scheduled_time_is_counted_inside_the_schedule_only() -> None:
+    start = activity.epoch(at(TUESDAY, "16:00:00"))
+    end = activity.epoch(at(WEDNESDAY, "10:00:00"))
+
+    assert miner.scheduled(start, end) == 4 * 3600
+
+
+def test_no_time_outside_the_schedule_is_scheduled() -> None:
+    start = activity.epoch(at(SATURDAY, "09:00:00"))
+    end = activity.epoch(at(SATURDAY, "17:00:00"))
+
+    assert miner.scheduled(start, end) == 0
 
 
 def test_an_outage_is_reported_when_no_event_was_ever_written() -> None:
