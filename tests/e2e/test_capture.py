@@ -1032,3 +1032,34 @@ def test_a_change_a_page_s_script_makes_on_a_select_is_not_taken_for_a_person_s(
         recording.stop()
 
     assert event.action == activity.Action("select", "select", 'select[name="country"]', None)
+
+
+def test_prose_is_no_name_for_an_element(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """An aria-label says something, often about a person, and a page writes what it likes
+    in one. So it is not read. An element that has no other name is told apart by its
+    place, and the prose is nowhere in what was written."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        tab.run(
+            "(() => { const b = document.createElement('button');"
+            " b.setAttribute('aria-label', 'Order 4711 for Anna: paid');"
+            " document.body.appendChild(b); })()"
+        )
+        tab.click("button[aria-label]")
+        (event,) = until(lambda: recording.of_kind("click"), "a click on the unnamed element", 10)
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert event.action is not None
+    assert event.action.tag == "button"
+    placed = event.action.fingerprint
+    assert placed.startswith("html:nth-child(1)>body:nth-child(2)>button:nth-child(")
+    written = recording.written()
+    for word in ("Order", "4711", "Anna", "paid", "aria"):
+        assert word not in written

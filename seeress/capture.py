@@ -3,9 +3,10 @@
 The capture is a second client of the browser's DevTools connection. It attaches to every
 tab of the browser's default context, and so never to a private window, and in each it runs
 a listener, in a world of the page that the page's own scripts cannot reach. The listener
-reports a click, an input, a submit and a select. It reads an element's tag, four attributes
-that name it and two that say what kind of a field it is, and nothing else: never what a
-field holds, and never the text of a page.
+reports what the browser itself did: a click, an input, a submit and a select. It reads an
+element's tag, three attributes that name it and two that say what kind of a field it is,
+and nothing else: never what a field holds, never an attribute that holds prose, and never
+the text of a page.
 
 The site and the path come from the browser, not from the page. The capture takes them from
 the address the browser last gave for the tab, without the query and the fragment. So no
@@ -79,8 +80,10 @@ LISTENER = r"""(() => {
     // An identifier with a digit in it is another one on every visit, so its digits become #.
     const stable = (text) => text.replace(/[0-9]/g, "#");
 
-    // One attribute that names an element, as tag[name="value"], or null when the element
-    // has none. An id with a digit in it is not stable, so it does not name an element.
+    // Three attributes may name an element, as tag[name="value"], or none of them does.
+    // An id with a digit in it is not stable, so it does not name an element. No attribute
+    // that holds prose names one: an aria-label says something, often about a person, and a
+    // page writes what it likes in it.
     const attribute = (element, name, text) => {
       if (!text) return null;
       if (name === "id" && /[0-9]/.test(text)) return null;
@@ -89,8 +92,7 @@ LISTENER = r"""(() => {
     const naming = (element) =>
       attribute(element, "data-testid", element.getAttribute("data-testid")) ||
       attribute(element, "id", element.getAttribute("id")) ||
-      attribute(element, "name", element.getAttribute("name")) ||
-      attribute(element, "aria-label", element.getAttribute("aria-label"));
+      attribute(element, "name", element.getAttribute("name"));
 
     // An element that no attribute names is told apart by its place and the place of three
     // parents, the outermost first.

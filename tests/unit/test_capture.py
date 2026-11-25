@@ -209,11 +209,13 @@ def test_the_listener_reads_no_property_that_holds_what_a_person_wrote(
     assert read_property not in capture.LISTENER
 
 
-def test_the_listener_reads_no_attribute_but_the_six_it_names() -> None:
-    """Four attributes that name an element, and two that say what kind of a field it is."""
+def test_the_listener_reads_no_attribute_but_the_five_it_names() -> None:
+    """Three attributes that name an element, and two that say what kind of a field it is.
+    Prose is no name: an aria-label says something, often about a person, and a page
+    writes what it likes in one."""
     names = set(re.findall(r'getAttribute\("([a-z-]+)"\)', capture.LISTENER))
 
-    assert names == {"data-testid", "id", "name", "aria-label", "type", "autocomplete"}
+    assert names == {"data-testid", "id", "name", "type", "autocomplete"}
 
 
 def test_the_listener_reports_through_the_binding() -> None:
