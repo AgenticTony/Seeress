@@ -4,8 +4,12 @@ Every test runs in a throwaway home directory of its own, without cloud keys, an
 is marked `e2e` or `git`) without the ability to start a process or open a connection. A unit
 test that tries either fails at once and names itself, instead of reaching the real browser
 tool. A test marked `git` may start git and nothing else.
+
+The browser tool's own library is given a home of its own before any test module is
+imported, because two import it, and on import it reads and writes where it lives.
 """
 
+import functools
 import os
 import shutil
 import subprocess
@@ -29,15 +33,28 @@ Patcher = Callable[[ModuleType, str, object], None]
 # resolved form is used because the operating system counts that in the socket's length.
 SHORT_TMP = str(Path(tempfile.gettempdir()).resolve()) if sys.platform == "win32" else "/tmp"  # noqa: S108 - mkdtemp makes each folder inside private; /tmp is the shortest path
 
+# The home the run started in, read before any test changes it.
+HOME_THE_RUN_STARTED_IN = os.environ.get("HOME", "")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Before any test module is imported, the browser tool's library gets a home of its own.
+
+    Two test modules import that library, and on import it makes its folders and reads the
+    files of its workspace. It finds its home in BH_HOME and, when that is not set, under the
+    real home. The fixture below comes too late for that: it runs per test, after the import.
+    """
+    folder = Path(tempfile.mkdtemp(prefix="sr-bh-", dir=SHORT_TMP)).resolve() / "browser-harness"
+    os.environ["BH_HOME"] = str(folder)
+    config.add_cleanup(functools.partial(shutil.rmtree, folder.parent, ignore_errors=True))
+
 
 class OutsideWorldError(RuntimeError):
     """Raised when a unit test tries to start a process or open a connection."""
 
 
 @pytest.fixture(autouse=True)
-def seeress_home_of_its_own(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[Path]:
+def seeress_home_of_its_own(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """No test ever writes into the real home, asked for or not.
 
     Every test gets a short throwaway home of its own, and SEERESS_HOME, HOME and
@@ -47,16 +64,15 @@ def seeress_home_of_its_own(
     Two tests once reached the real home because this was asked for. One left an empty
     folder in the real Seeress home. The other rewrote the LaunchAgent file of the activity
     logger: it ran `watcher.start()`, which built the path from Path.home(). A test marked
-    `e2e` keeps the HOME it was given: it starts a real browser through the browser tool,
-    which has not yet been run from a throwaway HOME.
+    `e2e` was exempt until 2026-11-25: the seven tests on a real browser were then run with
+    HOME on an empty folder, and passed, so none is exempt now.
     """
     root = Path(tempfile.mkdtemp(prefix="sr-home-", dir=SHORT_TMP)).resolve()
     fake = root / "home"
     fake.mkdir()
     monkeypatch.setenv("SEERESS_HOME", str(fake / ".seeress"))
-    if request.node.get_closest_marker("e2e") is None:
-        monkeypatch.setenv("HOME", str(fake))
-        monkeypatch.setattr(Path, "home", lambda: fake)
+    monkeypatch.setenv("HOME", str(fake))
+    monkeypatch.setattr(Path, "home", lambda: fake)
     yield fake
     shutil.rmtree(root, ignore_errors=True)
 

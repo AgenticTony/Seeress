@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import conftest
+
 GIT = shutil.which("git")
 
 
@@ -59,3 +61,31 @@ def test_a_test_runs_in_a_home_of_its_own() -> None:
 
 def test_a_test_with_no_marker_finds_the_seeress_home_inside_its_own() -> None:
     assert Path(os.environ["SEERESS_HOME"]) == Path.home() / ".seeress"
+
+
+@pytest.mark.git
+def test_a_test_marked_git_also_runs_in_a_home_of_its_own() -> None:
+    home = Path(os.environ["HOME"])
+
+    assert Path.home() == home
+    assert home.parent.name.startswith("sr-home-")
+
+
+def test_a_test_cannot_connect_through_connect_ex_either() -> None:
+    with pytest.raises(RuntimeError, match="tried to start a process or open a connection"):
+        socket.socket().connect_ex(("127.0.0.1", 9))
+
+
+def test_a_test_cannot_run_a_shell_command() -> None:
+    with pytest.raises(RuntimeError, match="tried to start a process or open a connection"):
+        os.system("true")  # noqa: S605, S607 - refused by the guard before it runs
+
+
+def test_the_browser_tool_s_library_is_kept_in_a_home_of_its_own() -> None:
+    """Two test modules import it, and on import it makes its folders and reads its
+    workspace from its home. That is never the home the run started in."""
+    home = Path(os.environ["BH_HOME"]).resolve()
+
+    assert home.is_dir()
+    assert home.parent.name.startswith("sr-")
+    assert not home.is_relative_to(Path(conftest.HOME_THE_RUN_STARTED_IN))
