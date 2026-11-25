@@ -345,21 +345,37 @@ def remember(home: Path, proposal: Proposal) -> Proposal:
 
     This is the miner's. What was remembered last under the name decides what is kept. If
     its status is approved or compiled, the new proposal keeps its goal and its status: they
-    are the user's words and the user's decision. If it is dismissed, it stays so. The
-    evidence is always the new one. A command that makes a decision writes its line with
-    record, which defers to nothing.
+    are the user's words and the user's decision. If it is dismissed, it stays so, with the
+    goal the user saw when setting it aside: a model's newer sentence does not follow it
+    there. The evidence is always the new one. A command that makes a decision writes its
+    line with record, which defers to nothing.
     """
     before = last(home, proposal.name)
-    if before is not None:
-        if before.status in APPROVED:
-            proposal = replace(proposal, goal=before.goal, status=before.status)
-        elif before.status == "dismissed":
-            proposal = replace(proposal, status="dismissed")
+    if before is not None and (before.status in APPROVED or before.status == "dismissed"):
+        kept = replace(proposal, goal=before.goal, status=before.status)
+        proposal = (
+            replace(kept, confidence=before.confidence) if before.status == "dismissed" else kept
+        )
     return record(home, proposal)
 
 
 def record(home: Path, proposal: Proposal) -> Proposal:
-    """Write the proposal as one more line under its name, exactly as it is."""
+    """Write the proposal as one more line under its name, exactly as it is.
+
+    Raises MiningError, and writes nothing, for a proposal that no reader could read back:
+    one seen on more days than a proposal holds. A line nothing can read is no memory.
+    """
+    if proposal.days > DAYS_AT_MOST or len(proposal.sessions) > DAYS_AT_MOST:
+        raise MiningError(
+            f"{proposal.name} was seen on {max(proposal.days, len(proposal.sessions))} days,"
+            f" and a proposal holds evidence on {DAYS_AT_MOST} at the most. It is not written."
+        )
+    try:
+        Proposal.parse(proposal.as_dict())
+    except ValueError as error:
+        raise MiningError(
+            f"{proposal.name} cannot be written: no reader could read it back."
+        ) from error
     path = _file(home, proposal.name)  # a bad name is refused before anything is made
     folder(home)
     # The file is given its mode as it is opened, so that it is never readable by another
@@ -368,6 +384,26 @@ def record(home: Path, proposal: Proposal) -> Proposal:
     with os.fdopen(opened, "a", encoding="utf-8") as file:
         file.write(json.dumps(proposal.as_dict(), ensure_ascii=False) + "\n")
     return proposal
+
+
+def written_by_the_user(home: Path, name: str) -> bool:
+    """True when the goal a proposal holds is the user's own: a line under its name was
+    approved, or compiled, with this same goal.
+
+    The status alone does not say. A proposal set aside after its goal was written keeps the
+    user's words under a status that says dismissed.
+    """
+    kept = last(home, name)
+    if kept is None:
+        return False
+    for line in _file(home, name).read_bytes().splitlines():
+        try:
+            found = Proposal.parse(json.loads(line))
+        except ValueError:  # not JSON, or not a proposal
+            continue
+        if found.status in APPROVED and found.goal == kept.goal:
+            return True
+    return False
 
 
 def remembered(home: Path, name: str) -> Proposal:

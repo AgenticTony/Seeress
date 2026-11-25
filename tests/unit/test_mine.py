@@ -8,12 +8,13 @@ read: whatever time the work needs comes in as `now`.
 import json
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from seeress import activity, mine, proposals
+from seeress import activity, brain, mine, miner, proposals
 from seeress.errors import MiningError
 
 MONDAY, TUESDAY, WEDNESDAY, FRIDAY, SATURDAY = (
@@ -91,6 +92,11 @@ class Model:
 
 def said(*objects: dict[str, object]) -> str:
     return json.dumps(list(objects))
+
+
+def checked(number: int) -> dict[str, object]:
+    """A model's answer for one candidate: a sentence and a confidence."""
+    return {"n": number, "sentence": "Checks.", "confidence": 3}
 
 
 def files_of(home: Path) -> dict[str, list[proposals.Proposal]]:
@@ -618,3 +624,272 @@ def test_a_file_of_which_no_line_reads_is_not_counted(tmp_path: Path) -> None:
     file.write_text("this line does not read\n", encoding="utf-8")
 
     assert "Proposals: 0 proposed, 0 approved, 0 compiled, 0 dismissed." in mine.progress(tmp_path)
+
+
+# --------------------------------------------------------- which model is asked ---
+
+
+def a_cloud_model_in_the_settings(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A settings file with a cloud endpoint in it, and its key in the environment."""
+    settings = home / ".seeress" / "config.toml"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        '[[endpoints]]\nname = "tenant"\nbase_url = "https://models.tenant.example/v1"\n'
+        'api_key_env = "TENANT_KEY"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TENANT_KEY", "t")
+
+
+def test_the_model_is_one_on_this_machine_whatever_the_settings_say(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The prompt is one person's activity. A cloud endpoint in the settings, and its key
+    in the environment, change nothing: a model on this machine reads it, and no other."""
+    a_cloud_model_in_the_settings(home, monkeypatch)
+    asked: list[tuple[brain.Chosen, float]] = []
+
+    def fake_chat(endpoint: brain.Chosen, messages: object, timeout: float = 300) -> str:
+        asked.append((endpoint, timeout))
+        return "[]"
+
+    monkeypatch.setattr(mine, "chat", fake_chat)
+
+    mine.local_model()("a prompt")
+
+    assert [(endpoint.name, endpoint.base_url) for endpoint, _ in asked] == [
+        ("ollama-local", "http://localhost:11434/v1")
+    ]
+    assert [timeout for _, timeout in asked] == [600]
+
+
+def test_run_reads_the_record_under_the_seeress_home(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    week(home / ".seeress")
+    made = Model(said({"n": 1, "sentence": "Checks the mail.", "confidence": 4}))
+    monkeypatch.setattr(mine, "local_model", lambda: made)
+
+    report = mine.run()
+
+    assert "Mined all recorded time: 9 events in 3 sittings." in report
+    assert "Checks the mail." in report
+    assert len(made.prompts) == 1
+
+
+def test_run_with_no_llm_asks_no_model(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    week(home / ".seeress")
+
+    def the_model_was_asked_for() -> miner.Ask:
+        raise AssertionError("the model was asked for, and no_llm was set")
+
+    monkeypatch.setattr(mine, "local_model", the_model_was_asked_for)
+
+    report = mine.run(no_llm=True)
+
+    assert "Mined all recorded time: 9 events in 3 sittings." in report
+    assert "model:" not in report
+
+
+# ------------------------------------------------------ the words of the user ---
+
+
+def test_the_words_of_the_user_are_shown_as_theirs_and_with_no_confidence(
+    tmp_path: Path,
+) -> None:
+    """Once the goal is the user's, it is not shown as a model's sentence, nor with a
+    confidence a model gave to another sentence."""
+    week(tmp_path)
+    mine.mine(
+        tmp_path,
+        ask=Model(said({"n": 1, "sentence": "Checks the mail.", "confidence": 4})),
+        now=NOW,
+    )
+    name = names("abc")
+    mine.set_goal(name, "Clear the invoices.", home=tmp_path)
+
+    shown = mine.show(name, home=tmp_path)
+
+    assert "  goal:   Clear the invoices.\n" in shown
+    assert "model:" not in shown
+    assert "confidence" not in shown
+    assert "Checks the mail." not in shown
+    kept = proposals.last(tmp_path, name)
+    assert kept is not None and kept.confidence is None
+
+    report = mine.mine(tmp_path, ask=None, now=NOW)
+
+    assert "  goal:   Clear the invoices.\n" in report
+    assert "model:" not in report
+
+
+# ------------------------------------------------- what is proposed, and how ---
+
+
+def test_a_dismissed_proposal_takes_no_place_among_those_asked_about(tmp_path: Path) -> None:
+    """Four rituals recur, and three are asked about at the most. The three offered were
+    dismissed: the fourth is offered next time, and none of the three is asked about again."""
+    lines: list[dict[str, Any]] = []
+    for hour, sites in enumerate(("abc", "def", "ghi", "jkl"), start=9):
+        lines += [line for day in THREE_DAYS for line in ritual(day, sites, hour=hour)]
+    write(tmp_path, FILE, *lines)
+    first = Model(said(*(checked(n) for n in (1, 2, 3))))
+    mine.mine(tmp_path, ask=first, now=NOW, asked_at_most=3)
+    for sites in ("abc", "def", "ghi"):
+        mine.dismiss(names(sites), home=tmp_path)
+    second = Model(said({"n": 1, "sentence": "Checks.", "confidence": 3}))
+
+    report = mine.mine(tmp_path, ask=second, now=NOW, asked_at_most=3)
+
+    assert len(second.prompts) == 1
+    assert "1. sites: j.example → k.example → l.example" in second.prompts[0]
+    for sites in ("abc", "def", "ghi"):
+        for site in sites:
+            assert f"{site}.example" not in second.prompts[0]
+        kept = proposals.last(tmp_path, names(sites))
+        assert kept is not None and kept.status == "dismissed"
+    assert f"{names('jkl')}   proposed" in report
+
+
+def test_a_pattern_seen_on_more_than_a_year_of_days_is_left_out_and_said_so(
+    tmp_path: Path,
+) -> None:
+    """A proposal holds evidence on 366 days at the most. One that could never be read back
+    is not written."""
+    first = date(2025, 1, 1)
+    days = [(first + timedelta(days=number)).isoformat() for number in range(367)]
+    write(tmp_path, FILE, *[line for day in days for line in ritual(day, "abc")])
+
+    report = mine.mine(tmp_path, ask=None, now=activity.epoch(f"{days[-1]}T12:00:00"))
+
+    assert "Proposals: none." in report
+    assert "1 pattern recurs on more than 366 days" in report
+    assert proposals.every(tmp_path) == []
+
+
+def test_sequences_and_rituals_are_ordered_together_by_strength(tmp_path: Path) -> None:
+    """A ritual seen on four days comes before a sequence seen on three."""
+    lines: list[dict[str, Any]] = []
+    for day in THREE_DAYS:
+        lines += ritual(day, "abc")
+    for number, day in enumerate((MONDAY, TUESDAY, WEDNESDAY, FRIDAY)):
+        pair = ("d", "e") if number % 2 == 0 else ("e", "d")
+        lines += [visit(site, at(day, f"10:0{minute}:00")) for minute, site in enumerate(pair)]
+    write(tmp_path, FILE, *lines)
+    made = Model(said(*(checked(n) for n in (1, 2))))
+
+    mine.mine(tmp_path, ask=made, now=NOW)
+
+    (prompt,) = made.prompts
+    assert prompt.index("1. sites: d.example → e.example (the order varies)") < prompt.index(
+        "2. sites: a.example → b.example → c.example (always in this order)"
+    )
+
+
+def test_nothing_is_left_once_the_agent_s_minutes_are_taken_out(tmp_path: Path) -> None:
+    """Every event was written while the agent drove the browser. The report says so, and
+    does not say that no event can be placed in the schedule."""
+    week(tmp_path)
+    write(
+        tmp_path,
+        "agent-runs.jsonl",
+        {
+            "start": at(MONDAY, "08:00:00"),
+            "end": at(FRIDAY, "13:00:00"),
+            "what": "task",
+            "name": None,
+        },
+    )
+
+    report = mine.mine(tmp_path, ask=None, now=NOW)
+
+    assert "Mined all recorded time: 0 events in 0 sittings." in report
+    assert "every one of the 9 events recorded was written while the agent" in report
+    assert "no event can be placed in the schedule" not in report
+
+
+def test_at_most_twenty_five_are_asked_about(tmp_path: Path) -> None:
+    """With more candidates than that, the strongest 25 are asked about, in one prompt."""
+    lines: list[dict[str, Any]] = []
+    for number in range(26):
+        hour, minute = divmod(number * 37, 60)
+        for day in THREE_DAYS:
+            lines += [
+                visit(site, at(day, f"{6 + hour:02d}:{minute + index:02d}:00"))
+                for index, site in enumerate((f"s{number}a", f"s{number}b"))
+            ]
+    write(tmp_path, FILE, *lines)
+    made = Model(said(*(checked(n) for n in range(1, 27))))
+
+    report = mine.mine(tmp_path, ask=made, now=NOW)
+
+    assert "Proposals: 25." in report
+    (prompt,) = made.prompts
+    assert "25. sites:" in prompt
+    assert "26." not in prompt
+
+
+# ------------------------------------------------- the minutes with no data ---
+
+
+def no_data(report: str) -> str:
+    return next(line for line in report.splitlines() if line.startswith("Time with no data:"))
+
+
+def test_an_outage_that_ended_before_the_first_event_is_no_data_of_the_period(
+    tmp_path: Path,
+) -> None:
+    """The period runs from the first event to now. An outage from 08:00 to 08:20, before
+    a first event at 08:45, is not in it, though it is in the schedule's hours."""
+    week(tmp_path)
+    write(tmp_path, "spike-20261115.jsonl", visit("early.example", at(MONDAY, "08:45:00")))
+    before = no_data(mine.mine(tmp_path, ask=None, now=NOW))
+
+    write(tmp_path, ANOTHER_FILE, *an_outage(MONDAY, "08:00:00", "08:20:00"))
+
+    assert no_data(mine.mine(tmp_path, ask=None, now=NOW)) == before
+
+
+def test_an_outage_outside_the_schedule_hours_is_no_data(tmp_path: Path) -> None:
+    week(tmp_path)
+    before = no_data(mine.mine(tmp_path, ask=None, now=NOW))
+
+    write(tmp_path, ANOTHER_FILE, *an_outage(MONDAY, "18:00:00", "20:00:00"))
+
+    assert no_data(mine.mine(tmp_path, ask=None, now=NOW)) == before
+
+
+def test_a_proposal_set_aside_after_its_goal_was_written_still_shows_the_user_s_words(
+    tmp_path: Path,
+) -> None:
+    week(tmp_path)
+    mine.mine(
+        tmp_path,
+        ask=Model(said({"n": 1, "sentence": "Checks the mail.", "confidence": 4})),
+        now=NOW,
+    )
+    name = names("abc")
+    mine.set_goal(name, "Clear the invoices.", home=tmp_path)
+    mine.dismiss(name, home=tmp_path)
+
+    shown = mine.show(name, home=tmp_path)
+
+    assert "  goal:   Clear the invoices.\n" in shown
+    assert "model:" not in shown
+    assert "confidence" not in shown
+
+
+def test_a_dismissed_proposal_that_recurs_is_left_as_the_user_saw_it(tmp_path: Path) -> None:
+    week(tmp_path)
+    mine.mine(
+        tmp_path, ask=Model(said({"n": 1, "sentence": "First sentence.", "confidence": 4})), now=NOW
+    )
+    name = names("abc")
+    mine.dismiss(name, home=tmp_path)
+
+    report = mine.mine(tmp_path, ask=Model(said({"n": 1, "sentence": "Second sentence."})), now=NOW)
+
+    kept = proposals.last(tmp_path, name)
+    assert kept is not None
+    assert (kept.status, kept.goal, kept.confidence) == ("dismissed", "First sentence.", 4)
+    assert "Second sentence." not in report

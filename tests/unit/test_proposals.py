@@ -8,6 +8,7 @@ it.
 import json
 import os
 import stat
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -166,12 +167,54 @@ def test_an_approved_or_compiled_proposal_keeps_its_goal_and_its_status(
     assert (written.status, written.goal, written.days) == (status, "The user's words.", 4)
 
 
-def test_a_dismissed_proposal_stays_dismissed(tmp_path: Path) -> None:
-    proposals.remember(tmp_path, a_proposal(status="dismissed", days=3))
+def test_a_dismissed_proposal_stays_dismissed_with_the_goal_the_user_saw(
+    tmp_path: Path,
+) -> None:
+    """The evidence is new. The status and the goal are as the user left them: a model's
+    newer sentence does not follow a proposal the user set aside."""
+    proposals.remember(tmp_path, a_proposal(status="dismissed", goal="As the user saw it.", days=3))
 
     written = proposals.remember(tmp_path, a_proposal(goal="A model's sentence.", days=4))
 
-    assert (written.status, written.goal, written.days) == ("dismissed", "A model's sentence.", 4)
+    assert (written.status, written.goal, written.days) == ("dismissed", "As the user saw it.", 4)
+
+
+def test_a_proposal_no_reader_could_read_back_is_not_written(tmp_path: Path) -> None:
+    """A proposal holds evidence on 366 days at the most, and a goal of 1000 characters. A
+    line nothing can read back is no memory, so it is not written at all."""
+    proposals.remember(tmp_path, a_proposal())
+    days = {f"2026-{number // 28 + 1:02d}-{number % 28 + 1:02d}": 1 for number in range(367)}
+
+    with pytest.raises(MiningError, match="367 days"):
+        proposals.record(tmp_path, replace(a_proposal(), days=367, sessions=days))
+    with pytest.raises(MiningError, match="cannot be written"):
+        proposals.record(tmp_path, replace(a_proposal(), goal="x" * 1001))
+
+    assert len(lines_of(tmp_path)) == 1
+
+
+def test_whose_words_a_goal_is_is_read_from_what_was_written_under_the_name(
+    tmp_path: Path,
+) -> None:
+    """The status alone does not say: a proposal set aside after its goal was written keeps
+    the user's words under a status that says dismissed."""
+    assert proposals.written_by_the_user(tmp_path, NAME) is False
+    proposals.remember(tmp_path, a_proposal(goal="A model's sentence."))
+    name = a_proposal().name
+
+    assert proposals.written_by_the_user(tmp_path, name) is False
+    proposals.record(tmp_path, replace(a_proposal(), goal="The user's words.", status="approved"))
+    assert proposals.written_by_the_user(tmp_path, name) is True
+    proposals.record(tmp_path, replace(a_proposal(), goal="The user's words.", status="dismissed"))
+    assert proposals.written_by_the_user(tmp_path, name) is True
+    proposals.record(tmp_path, replace(a_proposal(), goal="Other words.", status="dismissed"))
+    assert proposals.written_by_the_user(tmp_path, name) is False
+
+
+def test_two_sequences_whose_sites_are_split_differently_never_share_a_name() -> None:
+    assert proposals.name_for(["ab.example", "c.example"]) != proposals.name_for(
+        ["a.example", "bc.example"]
+    )
 
 
 @pytest.mark.parametrize("name", ["../elsewhere", "check_invoices", "Check-invoices", ""])

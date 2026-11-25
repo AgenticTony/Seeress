@@ -29,8 +29,18 @@ from .activity import (
 from .brain import chat, endpoint_for, message
 from .config import seeress_home
 from .errors import MiningError
-from .miner import Ask, Candidate, Gap, Session, by_strength
-from .proposals import GOAL_AT_MOST, Proposal, every, record, remember, remembered
+from .miner import Ask, Candidate, Gap, Session, by_strength, name_of
+from .proposals import (
+    APPROVED,
+    DAYS_AT_MOST,
+    GOAL_AT_MOST,
+    Proposal,
+    every,
+    record,
+    remember,
+    remembered,
+    written_by_the_user,
+)
 
 # How many candidates a model is asked about, and so how many are proposed. They are the
 # strongest, by days and then by sittings. On a month of invented events with random sites
@@ -82,6 +92,11 @@ def mine(
     With hours, only the last hours of the record are read. now is the moment the record is
     taken to end, in seconds. The clock is read once, and only when now is not given: the
     readers and the gaps work from the same moment.
+
+    At most asked_at_most candidates are asked about: the strongest that are not dismissed.
+    A dismissed proposal takes no place among them and is not asked about again. One that
+    recurs is remembered again, as the user left it, and listed last. A pattern seen on more
+    days than a proposal holds is left out, and the report says how many.
     """
     moment = time.time() if now is None else now
     events = read_events(home, hours, now=moment)
@@ -92,10 +107,28 @@ def mine(
     kept = miner.without_runs(events, runs)
     gaps = miner.gaps(kept, outages, now=moment)
     sittings = miner.sessions(kept, outages=outages)
-    candidates = _strongest(sittings, asked_at_most)
-    made = miner.propose(candidates, ask)
-    proposals = [remember(home, proposal) for proposal in made]
-    return _report(hours, len(kept), sittings, outages, gaps, moment, candidates, proposals)
+    found = _candidates(sittings)
+    too_long = [candidate for candidate in found if candidate.days > DAYS_AT_MOST]
+    dismissed = {proposal.name for proposal in every(home) if proposal.status == "dismissed"}
+    offered: list[Candidate] = []
+    set_aside: list[Candidate] = []
+    for candidate in found:
+        if candidate.days > DAYS_AT_MOST:
+            continue
+        (set_aside if name_of(candidate) in dismissed else offered).append(candidate)
+    asked = offered[:asked_at_most]
+    made = miner.propose(asked, ask)
+    found_again = [miner.propose([candidate], None)[0] for candidate in set_aside]
+    pairs = [
+        (candidate, remember(home, proposal))
+        for candidate, proposal in [
+            *zip(asked, made, strict=True),
+            *zip(set_aside, found_again, strict=True),
+        ]
+    ]
+    return _report(
+        home, hours, len(events), len(kept), sittings, outages, gaps, moment, pairs, len(too_long)
+    )
 
 
 def _nothing_found(home: Path, hours: float | None) -> str:
@@ -107,9 +140,9 @@ def _nothing_found(home: Path, hours: float | None) -> str:
     )
 
 
-def _strongest(sittings: Sequence[Session], asked_at_most: int) -> list[Candidate]:
-    """The candidates to propose: the sequences that recur, the rituals whose order varies,
-    and of them the strongest.
+def _candidates(sittings: Sequence[Session]) -> list[Candidate]:
+    """Every candidate, strongest first: the sequences that recur, and the rituals whose order
+    varies.
 
     A ritual whose sites are exactly those of a sequence is left out: the sequence says all
     the ritual says, and the order too.
@@ -121,37 +154,45 @@ def _strongest(sittings: Sequence[Session], asked_at_most: int) -> list[Candidat
         for candidate in miner.clusters(sittings)
         if frozenset(candidate.sites) not in sequenced
     ]
-    return by_strength([*fixed, *varied])[:asked_at_most]
+    return by_strength([*fixed, *varied])
 
 
 def _report(
+    home: Path,
     hours: float | None,
-    event_count: int,
+    recorded: int,
+    mined: int,
     sittings: Sequence[Session],
     outages: Sequence[Interval],
     gaps: Sequence[Gap],
     now: float,
-    candidates: Sequence[Candidate],
-    proposals: Sequence[Proposal],
+    pairs: Sequence[tuple[Candidate, Proposal]],
+    too_long: int,
 ) -> str:
-    """What was mined, then where the record has no data, then the proposals."""
+    """What was mined, then where the record has no data, then the proposals.
+
+    recorded is how many events the record holds; mined, how many are a person's once the
+    agent's runs are taken out. Each pair is a candidate and the proposal remembered for it.
+    """
     lines = [
-        f"Mined {_window(hours)}: {_count(event_count, 'event')} in "
-        f"{_count(len(sittings), 'sitting')}.",
-        _no_data(sittings, outages, gaps, now),
+        f"Mined {_window(hours)}: {_count(mined, 'event')} in {_count(len(sittings), 'sitting')}.",
+        _no_data(recorded, sittings, outages, gaps, now),
     ]
     lines.extend(_gap_lines(gaps))
-    if not proposals:
+    if too_long:
+        verb = "recurs" if too_long == 1 else "recur"
+        lines.append(
+            f"{_count(too_long, 'pattern')} {verb} on more than {DAYS_AT_MOST} days. A proposal"
+            " holds evidence on that many at the most, so none of them is proposed."
+        )
+    if not pairs:
         lines.append("Proposals: none.")
         lines.append(f"  Something must recur on at least {DAYS_NEEDED} days to be proposed.")
     else:
-        lines.append(f"Proposals: {len(proposals)}.")
-        last = sorted(
-            zip(candidates, proposals, strict=True),
-            key=lambda pair: pair[1].status == "dismissed",
-        )
+        lines.append(f"Proposals: {len(pairs)}.")
+        last = sorted(pairs, key=lambda pair: pair[1].status == "dismissed")
         for candidate, proposal in last:
-            lines.extend(_proposal_lines(proposal, candidate.paths))
+            lines.extend(_proposal_lines(proposal, candidate.paths, home=home))
     return "\n".join(lines) + "\n"
 
 
@@ -165,18 +206,31 @@ def _count(number: int, thing: str) -> str:
 
 
 def _no_data(
+    recorded: int,
     sittings: Sequence[Session],
     outages: Sequence[Interval],
     gaps: Sequence[Gap],
     now: float,
 ) -> str:
     """One line: the minutes in the schedule for which the record holds nothing, out of the
-    scheduled minutes of the period. The period runs from the first sitting to now."""
+    scheduled minutes of the period. The period runs from the first sitting to now. An
+    outage is counted for the part of it that is in the period and in the schedule."""
     if not sittings:
+        if recorded:
+            return (
+                f"Time with no data: every one of the {_count(recorded, 'event')} recorded was"
+                " written while the agent was driving the browser. Nothing of a person's is"
+                " left to mine."
+            )
         return "Time with no data: no event can be placed in the schedule."
-    scheduled = miner.scheduled(epoch(sittings[0].start), now)
+    first = epoch(sittings[0].start)
+    scheduled = miner.scheduled(first, now)
     silent = sum(epoch(gap.end) - epoch(gap.start) for gap in gaps if gap.why == "silent")
-    down = sum(miner.scheduled(outage.start, outage.end) for outage in outages if not outage.empty)
+    down = sum(
+        miner.scheduled(max(outage.start, first), min(outage.end, now))
+        for outage in outages
+        if not outage.empty
+    )
     minutes, total = round((silent + down) / 60), round(scheduled / 60)
     share = f" ({minutes / total:.0%})" if total else ""
     return f"Time with no data: {minutes} of {total} minutes in the schedule{share}."
@@ -194,13 +248,17 @@ def _gap_lines(gaps: Sequence[Gap]) -> list[str]:
     return lines
 
 
-def _proposal_lines(proposal: Proposal, paths: Sequence[tuple[str, ...]] | None) -> list[str]:
-    """The lines of one proposal: its name and status, its sites, its evidence, and what the
-    model said when it said something.
+def _proposal_lines(
+    proposal: Proposal, paths: Sequence[tuple[str, ...]] | None, *, home: Path
+) -> list[str]:
+    """The lines of one proposal: its name and status, its sites, its evidence, and its goal.
 
     paths holds one tuple for each site: what was seen there, as the miner found it. A
     proposal remembered from an earlier run has none to show, for a path is never
     remembered with it.
+
+    The goal is shown as the user's words once the user wrote it, with no confidence of a
+    model beside it. Until then it is a model's sentence.
     """
     order = "   the order varies" if proposal.order == "varies" else ""
     seen = sum(proposal.sessions.values())
@@ -216,10 +274,13 @@ def _proposal_lines(proposal: Proposal, paths: Sequence[tuple[str, ...]] | None)
         )
         lines.append(f"  paths:  {shown}")
     if proposal.goal:
-        confidence = (
-            f"confidence {proposal.confidence}: " if proposal.confidence is not None else ""
-        )
-        lines.append(f"  model:  {confidence}{proposal.goal}")
+        if proposal.status in APPROVED or written_by_the_user(home, proposal.name):
+            lines.append(f"  goal:   {proposal.goal}")
+        else:
+            confidence = (
+                f"confidence {proposal.confidence}: " if proposal.confidence is not None else ""
+            )
+            lines.append(f"  model:  {confidence}{proposal.goal}")
     return lines
 
 
@@ -234,14 +295,17 @@ def _home(home: Path | None) -> Path:
 def show(name: str, home: Path | None = None) -> str:
     """One proposal as the report of mine prints it, but without its paths: they are the
     evidence of the run that found it, and are not remembered with it."""
-    return "\n".join(_proposal_lines(remembered(_home(home), name), None)) + "\n"
+    home = _home(home)
+    return "\n".join(_proposal_lines(remembered(home, name), None, home=home)) + "\n"
 
 
 def set_goal(name: str, goal: str | None = None, home: Path | None = None) -> str:
     """Write the goal in the user's own words. That approves the proposal.
 
-    A proposal that is compiled stays compiled. Nothing else of it is changed. The goal is
-    1 to 1000 characters once stripped: anything else is refused, and nothing is written.
+    A proposal that is compiled stays compiled. Nothing else of it is changed, except the
+    confidence: it was the model's, for the model's sentence, and goes with that sentence.
+    The goal is 1 to 1000 characters once stripped: anything else is refused, and nothing
+    is written.
     """
     if goal is None:
         raise MiningError(f'a goal needs words, in quotes: seeress proposal goal {name} "..."')
@@ -253,7 +317,7 @@ def set_goal(name: str, goal: str | None = None, home: Path | None = None) -> st
     home = _home(home)
     before = remembered(home, name)
     status = "compiled" if before.status == "compiled" else "approved"
-    record(home, replace(before, goal=words, status=status))
+    record(home, replace(before, goal=words, status=status, confidence=None))
     return f"Goal saved. To compile it: seeress proposal compile {name}"
 
 
