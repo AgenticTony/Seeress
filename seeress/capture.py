@@ -709,8 +709,12 @@ def forget(home: Path | None, before: str, *, yes: bool = False) -> str:
     how_many = f"{len(gone)} file" + ("" if len(gone) == 1 else "s")
     names = ", ".join(path.name for path in gone)
     if not yes:
+        is_are = "is" if len(gone) == 1 else "are"
         it = "it" if len(gone) == 1 else "them"
-        return f"{how_many} is held from before {before}: {names}\n--yes is needed to delete {it}."
+        return (
+            f"{how_many} {is_are} held from before {before}: {names}"
+            f"\n--yes is needed to delete {it}."
+        )
     for path in gone:
         path.unlink()
     return f"Deleted {how_many} held from before {before}: {names}"

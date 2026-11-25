@@ -1759,6 +1759,22 @@ def test_forget_names_what_is_before_the_day_and_deletes_nothing_without_a_yes(
     assert old.exists() and kept.exists()
 
 
+def test_forget_names_more_than_one_file_as_more_than_one(tmp_path: Path) -> None:
+    """The words said "2 files is held" for as long as more than one was, and the one test
+    of these words held a single file."""
+    older = held(tmp_path, "20261001")
+    old = held(tmp_path, "20261009")
+
+    said = capture.forget(tmp_path, "2026-10-10")
+
+    assert said == (
+        "2 files are held from before 2026-10-10: "
+        "activity-20261001.jsonl, activity-20261009.jsonl\n"
+        "--yes is needed to delete them."
+    )
+    assert older.exists() and old.exists()
+
+
 def test_forget_with_a_yes_deletes_what_is_before_the_day_and_nothing_else(tmp_path: Path) -> None:
     older = held(tmp_path, "20261001")
     old = held(tmp_path, "20261009")
