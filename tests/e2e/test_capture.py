@@ -659,7 +659,11 @@ def test_the_title_of_a_page_is_nowhere_in_what_the_capture_wrote(
         tab.type_text(TYPED, 'input[name="query"]')
         tab.click('[data-testid="save"]')
         tab.click('button[type="submit"]')
-        until(lambda: len(recording.events()) == 4, "an input, two clicks and a submit", 10)
+        until(
+            lambda: recording.kinds() == ["input", "click", "click", "submit"],
+            "an input, two clicks and a submit",
+            10,
+        )  # and not merely four events of any kind
     finally:
         tab.close()
         recording.stop()
@@ -971,7 +975,7 @@ def test_one_large_message_from_a_page_does_not_end_the_capture(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)  # the rule: the page is loaded and the listener is in it
         tab.run("console.log('x'.repeat(5 * 2**20))")
         waited_a_moment()
         tab.click('[data-testid="save"]')

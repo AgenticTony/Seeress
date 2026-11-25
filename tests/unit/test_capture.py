@@ -1390,9 +1390,13 @@ def test_a_status_that_tells_no_time_is_no_report(tmp_path: Path) -> None:
     assert report(tmp_path) == "Capture has never run here."
 
 
-def test_the_status_says_what_the_gate_has_written(tmp_path: Path) -> None:
+def test_the_status_says_what_the_gate_has_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The status is told of the state, and counts what passes the gate. It is written at
-    once for a state, and now and then for an event."""
+    once for a state, and now and then for an event. The clock does not move here: before,
+    "0 events" held only because less than a minute had passed."""
+    monkeypatch.setattr(time, "time", lambda: 1_800_000_000.0)
     status = capture.Status(tmp_path)
     gate = capture.Gate(tmp_path, status=status)
 
@@ -1817,13 +1821,15 @@ def test_a_recorder_that_failed_once_shows_no_error_while_it_runs_well_after(
         ]
         assert recorder.running
         assert recorder.error is None
+        thread = recorder._thread
         recorder.start()  # a second start starts nothing more
-        time.sleep(0.1)  # long enough for a second connection to say its first words
-        assert len(standing.sent) == 4
+        assert recorder._thread is thread  # the same thread, and no other begun
+        assert standing.attempts == 2  # one refused, one let in
     finally:
         recorder.stop()
 
     assert recorder.error is None
+    assert standing.sent[-1].startswith('{"id": 4,')  # and nothing more was sent after the stop
     assert recorder.running is False
 
 
@@ -2450,6 +2456,9 @@ def test_a_signal_that_asks_the_entry_point_to_end_ends_it_cleanly(
     standing = Standing()
     monkeypatch.setattr(capture, "connect", standing)
     real = capture.run
+    # The handler that was there, to be put back at the end. Before, the one of the test's
+    # was left behind for the rest of the session.
+    before = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, lambda *_: None)
 
     def in_hand(
@@ -2467,9 +2476,12 @@ def test_a_signal_that_asks_the_entry_point_to_end_ends_it_cleanly(
     began = time.monotonic()
     argv = ["ws://127.0.0.1:9/devtools/browser/one", "--home", str(tmp_path)]
 
-    assert capture.main(argv) == 0
-    assert time.monotonic() - began < 5
-    assert "It last reported stopped at" in capsys.readouterr().err
+    try:
+        assert capture.main(argv) == 0
+        assert time.monotonic() - began < 5
+        assert "It last reported stopped at" in capsys.readouterr().err
+    finally:
+        signal.signal(signal.SIGTERM, before)
 
 
 def test_the_entry_point_exits_one_and_says_why_when_the_capture_is_down(
