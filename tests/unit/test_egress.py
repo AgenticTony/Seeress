@@ -604,3 +604,55 @@ def test_the_recording_switch_reaches_the_children_seeress_starts(
 
     assert env.child_env("client", base=os.environ)[egress_hook.LOG] == expected
     assert env.child_env("personal", base=os.environ)[egress_hook.LOG] == expected
+
+
+# ---------------------------------------------------------- a capture, not a task ---
+
+CAPTURE = "python3.13 -m seeress.capture ws:"
+
+
+def capture_record(port: int = PORT) -> list[egress.Event]:
+    """A capture's record: its process exists, and it connected to the browser it was given."""
+    return [event("start", role=CAPTURE), event("connect", "127.0.0.1", port, role=CAPTURE)]
+
+
+def judged_as_a_capture(record: list[egress.Event]) -> list[egress.Finding]:
+    return egress.judge(
+        record, endpoint_port=PORT, seeress_process="seeress.capture", starts_browser_tool=False
+    )
+
+
+def test_a_capture_that_reached_its_browser_and_started_nothing_is_clean() -> None:
+    """A capture asks no model and starts no browser tool. It connects to the browser it
+    was given, and that is all it need have done."""
+
+    assert judged_as_a_capture(capture_record()) == []
+
+
+def test_a_capture_that_never_reached_its_browser_proves_nothing() -> None:
+    assert kinds(judged_as_a_capture(capture_record(port=9999))) == ["instrument"]
+
+
+def test_a_capture_that_contacted_another_machine_is_a_finding() -> None:
+    record = [*capture_record(), event("connect", "93.184.216.34", 443, role=CAPTURE)]
+
+    assert kinds(judged_as_a_capture(record)) == ["contact"]
+
+
+def test_a_capture_whose_process_started_the_browser_tool_is_no_capture() -> None:
+    """The capture has nothing to do with the browser tool. If its process started it,
+    something else ran in its place, and that is said."""
+    record = [
+        *capture_record(),
+        event("spawn", program="browser-use", env=TOOL_ENV, switches=TOOL_SWITCHES, role=CAPTURE),
+        tool_seen(),
+    ]
+
+    assert kinds(judged_as_a_capture(record)) == ["task"]
+
+
+def test_a_task_is_still_asked_for_the_browser_tool_it_started() -> None:
+    """The default is a task: the browser tool must have been started, and seen."""
+    record = [event("start"), event("connect", "127.0.0.1", PORT)]
+
+    assert "the browser tool was never started" in details(egress.judge(record, endpoint_port=PORT))

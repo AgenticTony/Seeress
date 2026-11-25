@@ -222,12 +222,18 @@ def judge(
     *,
     endpoint_port: int,
     seeress_process: str = "seeress.cli",
+    starts_browser_tool: bool = True,
 ) -> list[Finding]:
     """The rules the record breaks.
 
-    endpoint_port is the port of the one endpoint the run was configured to use. A
-    connection to it from Seeress's own process is required: without it the run never
-    reached its model, and an empty record would prove nothing.
+    endpoint_port is the port of the one destination the run must have reached on this
+    machine: the model endpoint of a task, or the browser of a capture. A connection to it
+    from Seeress's own process is required, for without it the run did not happen as
+    intended, and an empty record would prove nothing.
+
+    seeress_process names Seeress's own process in the record. A task starts the browser
+    tool, and it must be on the record; starts_browser_tool says so. A capture starts
+    nothing, and a record that shows its process starting the browser tool is a finding.
     """
     findings: list[Finding] = []
     for event in events:
@@ -263,10 +269,27 @@ def judge(
             *findings,
             Finding(
                 "instrument",
-                f"Seeress's own process was not seen contacting the model endpoint on port "
-                f"{endpoint_port}. The task did not run as intended.",
+                f"Seeress's own process was not seen reaching port {endpoint_port} on this "
+                "machine: the model endpoint of a task, or the browser of a capture. The run "
+                "did not happen as intended.",
             ),
         ]
+    if not starts_browser_tool:
+        started = [
+            event
+            for event in events
+            if event.kind == "spawn" and event.pid == own[0].pid and _is_tool(event.program)
+        ]
+        if started:
+            return [
+                *findings,
+                Finding(
+                    "task",
+                    "Seeress's own process started the browser tool, which a capture never "
+                    "does: something else ran in its place",
+                ),
+            ]
+        return findings
     return [*findings, *_incomplete(events, own[0].pid, seeress_process)]
 
 

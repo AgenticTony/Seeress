@@ -6,6 +6,12 @@ what it contacts and what it starts. The check fails if a host other than loopba
 contacted, if a child is given an environment it should not have, or if the instrument
 itself saw nothing.
 
+The third door is not a door of the agent: it is the capture, run as the logger of the
+record on a browser Seeress starts, which stands where the person's own Chrome would be. The
+capture must reach that browser and nothing else, start nothing, and hold the one click the
+check makes while it runs. What the stand-in browser itself contacts is reported, as under
+the personal door, and never judged: a real Chrome talks to its maker.
+
 Nothing is real except the browser. The model is a script served on loopback, and the
 page the task opens is served from loopback. The personal door attaches to a throwaway
 browser that stands where the user's Chrome would be; with --personal-chrome it attaches
@@ -16,8 +22,8 @@ library key, proxy settings and switches that turn telemetry on. None of that ma
 child. A control process runs first: if the instrument cannot see a connection and a
 child's environment that it made on purpose, the check fails.
 
-    uv run python tools/egress_check.py [--doors personal,client] [--personal-chrome]
-                                         [--keep] [--json FILE]
+    uv run python tools/egress_check.py [--doors personal,client,capture]
+                                         [--personal-chrome] [--keep] [--json FILE]
 
 Exit status 0 when every door is clean, 1 otherwise.
 """
@@ -52,7 +58,15 @@ HOOK_LINE = (
 )
 SHORT_TMP = "/tmp" if sys.platform != "win32" else tempfile.gettempdir()  # noqa: S108 - mkdtemp makes each folder private
 RUN_TIMEOUT = 240.0
+DOORS = (*config.PROFILES, "capture")
 TASK = "open the local page and read its title"
+# How long the capture runs in its door: long enough for the click, and no longer.
+CAPTURE_SECONDS = "10"
+# The capture's schedule in its door: all day, so that the hour of the run is nothing.
+CAPTURE_SETTINGS = (
+    '[capture]\ndays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]\n'
+    'from = "00:00"\nto = "23:00"\n'
+)
 # 0.0.0.0 is this machine too, but it is not on a browser's exempt list the way 127.0.0.1
 # is. So the same page shows both outcomes without anything leaving the machine.
 TRY_ROUTE = "then try the same page on another address of this machine"
@@ -411,6 +425,111 @@ def run_door(workspace: Workspace, door: str, personal_chrome: bool) -> Run:
     return run
 
 
+def _click_on_the_local_page(address: str, site_port: int) -> None:
+    """Open the local page in the browser at address and click its heading, as a mouse
+    would. The harness is the one the tests drive a tab with: it is not installed with the
+    package, so the repository is put on the path for it."""
+    sys.path.insert(0, str(REPO))
+    from tests.e2e.cdp import Browser, listened
+
+    own = Browser(address)
+    try:
+        tab = own.tab(f"http://127.0.0.1:{site_port}/page")
+        listened(tab)  # the capture listens in the page: the click will be heard
+        tab.click("h1")
+        tab.close()
+    finally:
+        own.close()
+
+
+def run_capture(workspace: Workspace) -> Run:
+    """Run the capture as the logger of the record, and judge what was recorded.
+
+    The browser is one Seeress starts, to stand where the person's own Chrome would be: what
+    it contacts is reported and not judged, as under the personal door. The capture is given
+    its address, and a home of its own whose schedule says all day. While it runs, the local
+    page is opened in the browser and its heading is clicked, as a mouse would. The capture
+    must have reached the browser and nothing else, must have started nothing, and the record
+    it wrote must hold that one click.
+    """
+    log = workspace.root / "capture.jsonl"
+    log.write_text("", encoding="utf-8")
+    home = workspace.root / "capture-home"
+    home.mkdir()
+    (home / config.CONFIG_FILE).write_text(CAPTURE_SETTINGS, encoding="utf-8")
+    run = Run("capture", [], -1, "", 0)
+    sampler = BrowserSampler([])
+    stand_in: str | None = None
+    port = 0
+    proc: subprocess.Popen[str] | None = None
+    try:
+        stand_in = bodies.launch(workspace.root / "capture-browser", headless=True, route=False)
+        port = int(urlsplit(stand_in).port or 0)
+        run.command = [
+            sys.executable,
+            "-m",
+            "seeress.capture",
+            stand_in,
+            "--home",
+            str(home),
+            "--seconds",
+            CAPTURE_SECONDS,
+        ]
+        sampler = BrowserSampler([f"user-data-dir={workspace.root / 'capture-browser'}"])
+        sampler.start()
+        # The interpreter of this run, an address given, and a home of the capture's own.
+        proc = subprocess.Popen(
+            run.command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={
+                **os.environ,
+                **PLANTED,
+                "SEERESS_HOME": str(home),
+                LOG: str(log),
+            },
+            cwd=REPO,
+        )
+        try:
+            _click_on_the_local_page(stand_in, workspace.site.port)
+        except AssertionError as exc:  # the harness says what it waited for and did not get
+            run.findings.append(Finding("task", f"the capture did not listen in the page: {exc}"))
+        out, err = proc.communicate(timeout=RUN_TIMEOUT)
+        run.exit_status = proc.returncode
+        run.output = (out + err).strip()
+    except subprocess.TimeoutExpired:
+        if proc is not None:
+            proc.kill()
+            proc.communicate()
+        run.findings.append(Finding("task", f"the capture did not stop within {RUN_TIMEOUT:g} s"))
+    except (SeeressError, OSError) as exc:
+        run.findings.append(Finding("task", f"the capture could not be run: {exc}"))
+    finally:
+        sampler.stop()
+        if stand_in is not None:
+            bodies.close_over_cdp(stand_in)
+    run.events = egress.read_events(log)
+    run.browser_contacts = sorted(sampler.seen)
+    run.browser_note = sampler.note
+    if not run.findings:
+        if run.exit_status != 0:
+            run.findings.append(
+                Finding("task", f"the capture did not stop as it ran (exit {run.exit_status})")
+            )
+        if "1 events written; 0 outside the schedule; 0 over the cap" not in run.output:
+            run.findings.append(
+                Finding("task", "the capture did not record the click, and only the click")
+            )
+    run.findings += egress.judge(
+        run.events,
+        endpoint_port=port,
+        seeress_process="seeress.capture",
+        starts_browser_tool=False,
+    )
+    return run
+
+
 def control(workspace: Workspace) -> list[Finding]:
     """Prove the instrument can see a connection, a child and what the child was given.
 
@@ -530,7 +649,12 @@ def report(runs: Sequence[Run], control_findings: Sequence[Finding]) -> str:
             else (run.output.splitlines()[-1] if run.output else "(no output)")
         )
         lines.append(f"  exit status {run.exit_status}; {last[:160]}")
-        lines.append(f"  model endpoint: {run.model_requests} requests, all to 127.0.0.1")
+        if run.door == "capture":
+            said = [line for line in run.output.splitlines() if line]
+            lines.append("  model endpoint: none is asked by the capture")
+            lines.append(f"  the capture says: {said[-2] if len(said) >= 2 else '(nothing)'}")
+        else:
+            lines.append(f"  model endpoint: {run.model_requests} requests, all to 127.0.0.1")
         lines.append("  Python processes observed:")
         for role, pid, parent, started in _processes(run.events):
             theirs = egress.contacts(event for event in run.events if event.pid == pid)
@@ -558,12 +682,13 @@ def report(runs: Sequence[Run], control_findings: Sequence[Finding]) -> str:
             )
         if run.door == "client":
             lines.append("  browser of Seeress's own: no route out except the client's own sites")
+        if run.door == "capture":
+            lines.append("  browser: a stand-in for the person's own, where the capture records")
         if run.browser_contacts:
-            what = (
-                "the user's browser's own, which is not Seeress's business"
-                if run.door == "personal"
-                else ""
-            )
+            what = {
+                "personal": "the user's browser's own, which is not Seeress's business",
+                "capture": "the stand-in for the person's own browser, which is not Seeress's",
+            }.get(run.door, "")
             lines.append(
                 "  browser's own connections seen outside this machine"
                 + (f" ({what})" if what else "")
@@ -587,7 +712,7 @@ def report(runs: Sequence[Run], control_findings: Sequence[Finding]) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Does Seeress contact anyone it should not?")
-    parser.add_argument("--doors", default="personal,client", help="which doors to run")
+    parser.add_argument("--doors", default="personal,client,capture", help="which doors to run")
     parser.add_argument(
         "--personal-chrome",
         action="store_true",
@@ -597,7 +722,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--json", type=Path, default=None, help="also write the record here")
     args = parser.parse_args(argv)
     doors = [door.strip() for door in args.doors.split(",") if door.strip()]
-    unknown = [door for door in doors if door not in config.PROFILES]
+    unknown = [door for door in doors if door not in DOORS]
     if unknown:
         parser.error(f"unknown door: {', '.join(unknown)}")
     if hook_path().exists():
@@ -606,7 +731,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     with Workspace(args.keep) as workspace:
         control_findings = control(workspace)
-        runs = [run_door(workspace, door, args.personal_chrome) for door in doors]
+        runs = [
+            run_capture(workspace)
+            if door == "capture"
+            else run_door(workspace, door, args.personal_chrome)
+            for door in doors
+        ]
         root = workspace.root if args.keep else None
     findings = [*control_findings, *(finding for run in runs for finding in run.findings)]
     print(report(runs, control_findings))
