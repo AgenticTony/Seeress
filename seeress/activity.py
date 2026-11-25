@@ -22,12 +22,14 @@ from urllib.parse import urlsplit
 # What an event says happened.
 KINDS: tuple[str, ...] = ("navigate", "focus", "click", "input", "submit", "select")
 
-# The patterns of the schema, searched for as its validator searches them. Matching the
-# whole string would not agree with it: `$` also holds before a final newline.
-TS_SHAPE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$")
-SITE_SHAPE = re.compile(r"^(?!www\.)[a-z0-9.-]+$")
+# The patterns of the schema, as it writes them, searched for as its validator searches them.
+# A pattern that must end at the end says so with `(?![\s\S])`, which means the same in Python
+# and in the dialect JSON Schema names. `$` does not: in Python it also holds before a final
+# newline.
+TS_SHAPE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?![\s\S])")
+SITE_SHAPE = re.compile(r"^(?!www\.)[a-z0-9.-]+(?![\s\S])")
 PATH_SHAPE = re.compile(r"^/")
-TARGET_SHAPE = re.compile(r"^[0-9a-f]{8}$")
+TARGET_SHAPE = re.compile(r"^[0-9a-f]{8}(?![\s\S])")
 
 # How the logger writes the second that ts holds.
 TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
@@ -122,9 +124,10 @@ def _read_line(line: bytes) -> Event | None:
         return None
     if not isinstance(data, dict):
         return None
-    # A line that already is an activity event carries a v of 1, and is read as it is. So
-    # it is never taken for a line of the logger's, whatever kind it names.
-    if _is_one(data.get("v")):
+    # A line that names a version is an activity event, and is read as it is. So it is never
+    # taken for a line of the logger's, whatever kind it names. Event.parse then keeps it only
+    # at the version this reader knows.
+    if "v" in data:
         return _event_or_none(data)
     kind = data.get("kind")
     if kind == "focus":

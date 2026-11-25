@@ -174,11 +174,6 @@ ACCEPTED_EVENTS = [
     pytest.param({**AN_EVENT, "v": 1.0}, id="v written 1.0"),
     # The schema judges the shape of a ts, not whether the date exists.
     pytest.param({**AN_EVENT, "ts": "2026-13-45T25:61:61"}, id="ts that is no real date"),
-    # `$` in Python's regular expressions holds before a final newline too, and the schema's
-    # validator searches with them. So the schema accepts these, and so must the reader.
-    pytest.param({**AN_EVENT, "ts": "2026-11-20T09:15:02\n"}, id="ts ending in a newline"),
-    pytest.param({**AN_EVENT, "site": "example.org\n"}, id="site ending in a newline"),
-    pytest.param({**AN_EVENT, "target": "1a2b3c4d\n"}, id="target ending in a newline"),
 ]
 
 REFUSED_EVENTS = [
@@ -190,16 +185,24 @@ REFUSED_EVENTS = [
     pytest.param({**AN_EVENT, "ts": "2026-11-20T09:15:02.5"}, id="ts with a fraction of a second"),
     pytest.param({**AN_EVENT, "ts": "2026-11-20T09:15:02+01:00"}, id="ts with an offset"),
     pytest.param({**AN_EVENT, "ts": "2026-11-20 09:15:02"}, id="ts of an impossible shape"),
+    pytest.param({**AN_EVENT, "ts": 20261120091505}, id="ts of another type"),
+    # JSON Schema writes a pattern in the ECMA-262 dialect, where the end of a pattern is
+    # the end of the string, newline included. The reader ends its patterns the same way.
+    pytest.param({**AN_EVENT, "ts": "2026-11-20T09:15:02\n"}, id="ts ending in a newline"),
+    pytest.param({**AN_EVENT, "site": "example.org\n"}, id="site ending in a newline"),
+    pytest.param({**AN_EVENT, "target": "1a2b3c4d\n"}, id="target ending in a newline"),
     pytest.param(
         {**AN_EVENT, "kind": "nav"}, id="the logger's word, where the event says navigate"
     ),
     pytest.param({**AN_EVENT, "kind": "hover"}, id="kind no event has"),
     pytest.param({**AN_EVENT, "kind": None}, id="kind of another type"),
     pytest.param({**AN_EVENT, "site": ""}, id="site empty"),
+    pytest.param({**AN_EVENT, "site": 7}, id="site of another type"),
     pytest.param({**AN_EVENT, "site": "https://example.org"}, id="site with a scheme"),
     pytest.param({**AN_EVENT, "site": "example.org/invoices"}, id="site with a path"),
     pytest.param({**AN_EVENT, "site": "www.example.org"}, id="site starting with www."),
     pytest.param({**AN_EVENT, "path": "invoices/7"}, id="path not starting with a slash"),
+    pytest.param({**AN_EVENT, "path": 7}, id="path of another type"),
     pytest.param({**AN_EVENT, "target": "1a2b3c4d5"}, id="target of the wrong length"),
     pytest.param({**AN_EVENT, "target": "1A2B3C4D"}, id="target of other characters"),
     pytest.param({**AN_EVENT, "target": 7}, id="target of another type"),
@@ -235,3 +238,15 @@ def test_an_event_is_returned_as_a_json_object_in_the_schema_s_order() -> None:
 
     assert list(event.as_dict()) == ["v", "ts", "kind", "site", "path", "target"]
     assert json.dumps(event.as_dict()) == json.dumps(AN_EVENT)
+
+
+def test_the_reader_holds_the_schemas_own_patterns_and_words() -> None:
+    """The reader searches with the patterns the schema writes, and with its list of words.
+    An instance can show only that the two agree on that instance."""
+    properties = ACTIVITY_EVENT["properties"]
+
+    assert list(activity.KINDS) == properties["kind"]["enum"]
+    assert activity.TS_SHAPE.pattern == properties["ts"]["pattern"]
+    assert activity.SITE_SHAPE.pattern == properties["site"]["pattern"]
+    assert activity.PATH_SHAPE.pattern == properties["path"]["pattern"]
+    assert activity.TARGET_SHAPE.pattern == properties["target"]["pattern"]

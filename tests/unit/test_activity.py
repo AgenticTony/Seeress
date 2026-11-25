@@ -265,6 +265,14 @@ def test_a_line_of_version_1_that_is_no_event_is_skipped_whatever_its_kind(tmp_p
     assert activity.read_events(tmp_path) == []
 
 
+def test_a_line_of_another_version_is_skipped_whatever_its_kind(tmp_path: Path) -> None:
+    """A line that names a version is read at the version this reader knows, or not at all.
+    It is never taken for a line of the logger's instead."""
+    write(tmp_path, FILE, {**focus_line("https://example.org/inbox"), "v": 2})
+
+    assert activity.read_events(tmp_path) == []
+
+
 # --------------------------------------------------------- a page's address ---
 
 

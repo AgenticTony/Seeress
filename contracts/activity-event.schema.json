@@ -12,7 +12,7 @@
     },
     "ts": {
       "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?![\\s\\S])",
       "description": "The local time of the machine, to the second, as the logger writes it"
     },
     "kind": {
@@ -22,7 +22,7 @@
     },
     "site": {
       "type": "string",
-      "pattern": "^(?!www\\.)[a-z0-9.-]+$",
+      "pattern": "^(?!www\\.)[a-z0-9.-]+(?![\\s\\S])",
       "description": "The host name, in lower case, without a leading 'www.'"
     },
     "path": {
@@ -32,7 +32,7 @@
     },
     "target": {
       "type": ["string", "null"],
-      "pattern": "^[0-9a-f]{8}$",
+      "pattern": "^[0-9a-f]{8}(?![\\s\\S])",
       "description": "The tab, by the first eight characters of its identifier, or null when the logger cannot name it"
     }
   },
