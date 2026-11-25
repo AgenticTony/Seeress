@@ -10,6 +10,7 @@ starts.
 """
 
 import asyncio
+import contextlib
 import gc
 import json
 import logging
@@ -2229,6 +2230,93 @@ def test_the_logger_tries_again_after_a_pause_when_the_connection_ends(
         5.0,
     ]  # the pause, and no more: a recorder that has ended is not waited for
     assert "nothing listens on 9" in capture.status(tmp_path)
+
+
+class Unwritten(Refused):
+    """Refused, where the status cannot be written, as on a full disk: the capture's own lets
+    that error go, and keeps the one that ended it."""
+
+    def start(self) -> None:
+        with contextlib.suppress(OSError):
+            super().start()
+
+
+def test_the_logger_says_why_the_capture_ended_when_the_status_cannot_be_written(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A full disk: the status file keeps what it last said, and `capture-status` reads that.
+    Before, the reason reached nobody: the logger went on trying, four times in sixteen
+    seconds, and its last words were the stale status. The reason is said once as it goes,
+    however many attempts end with it, and once more at the end."""
+
+    def no_space(*args: object, **kwargs: object) -> None:
+        raise OSError("No space left on device")
+
+    Refused.made.clear()
+    clock = Clock()
+    monkeypatch.setattr(capture, "Recorder", Unwritten)
+    monkeypatch.setattr(capture, "write_status", no_space)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+    caplog.set_level(logging.INFO, logger="seeress.capture")
+
+    said = capture.run(
+        "ws://127.0.0.1:9/devtools/browser/one", home=tmp_path, seconds=16, stop=clock
+    )
+
+    assert said == 1
+    assert len(Refused.made) == 4
+    why = [
+        record.getMessage()
+        for record in caplog.records
+        if "nothing listens on 9" in record.getMessage()
+    ]
+    assert len(why) == 2
+    assert "the capture ended" in why[0]
+    assert "last capture ended" in why[1]
+
+
+class Sometimes(Refused):
+    """Refused with a reason for each attempt: one for each of the first attempts as given,
+    and the last of them for every attempt after."""
+
+    reasons: ClassVar[list[str]] = []
+
+    def start(self) -> None:
+        given = min(len(Refused.made) - 1, len(self.reasons) - 1)
+        self.error = OSError(self.reasons[given])
+        if self.status is not None:
+            with contextlib.suppress(OSError):
+                self.status.state("down", f"OSError: {self.error}")
+
+
+def test_the_logger_says_a_reason_again_only_when_it_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Four attempts: two reasons, so the reason is said twice as it goes, and once at the
+    end. Not twelve times in a minute for one fault that stays."""
+    Sometimes.reasons = ["the port is closed", "the browser refused"]
+    Refused.made.clear()
+    clock = Clock()
+    monkeypatch.setattr(capture, "Recorder", Sometimes)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+    caplog.set_level(logging.INFO, logger="seeress.capture")
+
+    capture.run("ws://127.0.0.1:9/devtools/browser/one", home=tmp_path, seconds=16, stop=clock)
+
+    assert len(Refused.made) == 4
+    said = [
+        record.getMessage()
+        for record in caplog.records
+        if "the capture ended" in record.getMessage()
+    ]
+    assert said == [
+        "the capture ended: OSError: the port is closed",
+        "the capture ended: OSError: the browser refused",
+    ]
 
 
 def test_a_stop_ends_the_logger_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

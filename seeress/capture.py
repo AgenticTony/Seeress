@@ -1328,6 +1328,8 @@ def run(
     gate = Gate(home, schedule=settings.capture.schedule, status=told)
     stop = stop if stop is not None else threading.Event()
     began = time.monotonic()
+    last_error: BaseException | None = None
+    last_reason: str | None = None
 
     def ended() -> bool:
         return stop.is_set() or (seconds is not None and time.monotonic() - began >= seconds)
@@ -1345,6 +1347,16 @@ def run(
             while recorder.running and not ended():
                 stop.wait(POLL_SECONDS)
             recorder.stop()
+            error = recorder.error
+            if error is not None:
+                # The capture ended by itself, and the logger goes on. The status says why
+                # when it can be written. When it cannot, on a full disk, these words are the
+                # only place the reason reaches: said once, and again when it changes.
+                last_error = error
+                reason = _reason(error)
+                if reason != last_reason:
+                    logger.error("the capture ended: %s", reason)
+                    last_reason = reason
         if ended():
             break
         # The browser is away, or went away, or refused: the status says which. Wait, then
@@ -1353,6 +1365,8 @@ def run(
 
     report = _report(home)
     dropped = gate.dropped
+    if last_error is not None:
+        logger.error("the last capture ended with: %s", _reason(last_error))
     logger.info(
         "%d events written; %d outside the schedule; %d over the cap",
         gate.written,
