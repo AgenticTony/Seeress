@@ -11,6 +11,8 @@ from typing import Any
 
 from websockets.sync.client import connect
 
+from seeress import capture
+
 MOST_AT_ONCE = 2**22
 
 
@@ -90,6 +92,23 @@ class Tab:
     def wait_loaded(self, timeout: float = 10.0) -> None:
         until(lambda: self.run("document.readyState") == "complete", "a loaded page", timeout)
 
+    def listening(self) -> bool:
+        """Whether the capture listens in the page, asked in the world its listener runs in.
+        A page's own scripts cannot see that world. A test can, as the capture's equal."""
+        frame = self.call("Page.getFrameTree")["frameTree"]["frame"]["id"]
+        world = self.call(
+            "Page.createIsolatedWorld", {"frameId": frame, "worldName": capture.WORLD}
+        )
+        found = self.call(
+            "Runtime.evaluate",
+            {
+                "expression": "typeof window.__seeressListening",
+                "contextId": world["executionContextId"],
+                "returnByValue": True,
+            },
+        )
+        return bool(found["result"].get("value") == "boolean")
+
     def front(self) -> None:
         """Bring the tab to the front, where what is typed goes."""
         self.call("Page.bringToFront")
@@ -125,6 +144,14 @@ def _answer(socket: Any, identifier: int, method: str) -> Any:
             raise AssertionError(f"{method} was refused: {message['error']}")
         return message.get("result", {})
     raise AssertionError(f"no answer to {method} in 10 s")
+
+
+def listened(tab: Tab, timeout: float = 10.0) -> None:
+    """Wait until the capture listens in the tab: the page is loaded, and the listener is
+    in it. Until then a click or a keystroke is the page's own alone, and a test that sends
+    one is waiting for an event that cannot come."""
+    tab.wait_loaded(timeout)
+    until(tab.listening, "the capture to listen in the tab", timeout)
 
 
 def until(condition: Any, what: str, timeout: float) -> Any:

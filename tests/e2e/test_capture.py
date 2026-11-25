@@ -22,7 +22,7 @@ import pytest
 from seeress import activity, bodies, capture
 from seeress.errors import CaptureError
 
-from .cdp import Browser, Tab, until
+from .cdp import Browser, listened, until
 from .conftest import client_body
 
 pytestmark = pytest.mark.e2e
@@ -170,7 +170,7 @@ def test_a_click_in_a_page_is_an_event_with_the_site_and_the_path(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/one/two?token={QUERY}#top")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.click('[data-testid="save"]')
         (event,) = until(lambda: recording.of_kind("click"), "a click event", 10)
 
@@ -197,7 +197,7 @@ def test_what_a_person_types_is_in_no_event(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.type_text(TYPED, 'input[name="query"]')
         (event,) = until(lambda: recording.of_kind("input"), "an input event", 10)
 
@@ -221,7 +221,7 @@ def test_a_page_in_a_second_context_of_the_browser_is_not_captured(
         private.click('[data-testid="save"]')
         waited_a_moment()
 
-        open_page.wait_loaded()
+        listened(open_page)
         open_page.click('[data-testid="save"]')
         until(
             lambda: len(recording.of_kind("click")) == 1,
@@ -247,7 +247,7 @@ def test_a_click_inside_a_frame_is_not_the_person_s_click(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         in_frame = (
             'document.querySelector("iframe").contentDocument'
             ".querySelector('[data-testid=\"in-frame\"]')"
@@ -285,7 +285,7 @@ def test_the_kind_of_a_field_is_what_the_page_says_it_is_and_its_content_is_neve
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.type_text(TYPED, selector)
         (event,) = until(lambda: recording.of_kind("input"), f"an input event for {selector}", 10)
 
@@ -303,7 +303,7 @@ def test_the_digits_of_a_name_are_replaced_and_an_id_with_digits_is_no_name(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.type_text(TYPED, 'input[name="field-4711"]')
         tab.click("#btn-9")
         until(lambda: recording.kinds() == ["input", "click"], "an input and a click", 10)
@@ -326,7 +326,7 @@ def test_a_click_on_a_custom_element_is_a_click_on_an_element(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.click("my-widget")
         (event,) = until(lambda: recording.of_kind("click"), "a click event", 10)
 
@@ -347,7 +347,7 @@ def test_an_input_is_reported_once_per_visit_of_a_field(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.type_text("first", 'input[name="query"]')
         until(lambda: len(recording.of_kind("input")) == 1, "the first input", 10)
 
@@ -374,7 +374,7 @@ def test_a_select_is_reported_once_as_a_select(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.run(
             "const select = document.querySelector('select'); select.selectedIndex = 1;"
             " select.dispatchEvent(new Event('input', {bubbles: true}));"
@@ -395,7 +395,7 @@ def test_a_submit_is_reported(home: Path, browser: tuple[Browser, str], site: st
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.run("document.querySelector('form').requestSubmit()")
         (event,) = until(lambda: recording.of_kind("submit"), "a submit event", 10)
 
@@ -412,7 +412,7 @@ def test_the_page_s_own_scripts_can_neither_see_the_listener_nor_report_in_its_p
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.click('[data-testid="save"]')
         until(lambda: recording.of_kind("click"), "a click, which shows the listener is in", 10)
 
@@ -442,8 +442,9 @@ def test_a_page_open_before_the_capture_started_is_listened_to(
     own, address = browser
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        tab.wait_loaded()  # open before the capture is, which is the point
         recording = record_on(home, address)
+        listened(tab)
 
         def a_click() -> list[activity.Event]:
             tab.click('[data-testid="save"]')
@@ -463,11 +464,12 @@ def test_a_navigation_keeps_the_listener(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.click('[data-testid="save"]')
         until(lambda: len(recording.of_kind("click")) == 1, "the click on the first page", 10)
 
         tab.go(f"{site}/second")
+        listened(tab)
         tab.click('[data-testid="save"]')
         until(lambda: len(recording.of_kind("click")) == 2, "the click on the second page", 10)
 
@@ -485,7 +487,7 @@ def test_stopping_the_capture_ends_its_thread_and_the_page_is_listened_to_no_mor
     recording.start()  # a second start starts nothing more
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.click('[data-testid="save"]')
         (heard,) = until(lambda: recording.of_kind("click"), "a click before the stop", 10)
         alive = recording.recorder.running
@@ -559,7 +561,7 @@ def test_a_browser_that_carries_the_marker_is_attached_to_nothing_and_the_captur
         error = recording.recorder.error
         assert isinstance(error, CaptureError)
         assert "This browser is Seeress's own: it carries the marker." in str(error)
-        tab.wait_loaded()
+        tab.wait_loaded()  # and listens nowhere: no tab here waits for the capture
         tab.click('[data-testid="save"]')
         tab.type_text(TYPED, 'input[name="query"]')
         waited_a_moment()
@@ -586,7 +588,7 @@ def test_the_capture_takes_no_notice_of_any_cookie_but_the_marker(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()  # a click on a page that is not there yet is no click
+        listened(tab)
 
         def a_click() -> list[activity.Event]:
             tab.click('[data-testid="save"]')
@@ -613,7 +615,7 @@ def test_the_title_of_a_page_is_nowhere_in_what_the_capture_wrote(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/search?q={QUERY}#result", context=None)
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.type_text(TYPED, 'input[name="query"]')
         tab.click('[data-testid="save"]')
         tab.run("document.querySelector('form').requestSubmit()")
@@ -645,21 +647,6 @@ def said(home: Path) -> dict[str, object]:
 def a_click_on(day: str) -> activity.Event:
     """A click at ten in the morning of that day, as 2026-10-25."""
     return activity.Event(1, f"{day}T10:00:00", "click", "example.org", "/", "1A2B3C4D", None)
-
-
-def clicked_until_counted(tab: Tab, home: Path) -> int:
-    """Click until the capture counts one, as the listener may not be in at the first.
-    Returns how many clicks were made: one more may be in hand when the first is counted."""
-    made = 0
-
-    def a_click() -> object:
-        nonlocal made
-        tab.click('[data-testid="save"]')
-        made += 1
-        return said(home).get("events")
-
-    until(a_click, "the capture to count a click", 10)
-    return made
 
 
 def test_a_capture_on_an_address_where_nothing_listens_says_it_is_down_and_why(
@@ -695,9 +682,9 @@ def test_a_capture_that_is_recording_says_since_when_and_what_it_has_written(
     try:
         until(lambda: said(home).get("state") == "connected", "the capture to be recording", 10)
         since = said(home)["since"]
-        tab.wait_loaded()
-        made = clicked_until_counted(tab, home)
-        until(lambda: said(home)["events"] == made, "every click to be counted", 10)
+        listened(tab)
+        tab.click('[data-testid="save"]')
+        until(lambda: said(home)["events"] == 1, "the capture to count the click", 10)
         count, last = said(home)["events"], said(home)["last_event"]
         events = activity.read_events(home)
         recording = capture.status(home)
@@ -794,14 +781,9 @@ def test_a_fault_of_the_capture_s_own_is_kept_and_said(
     recorder.start()
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
-
-        def a_click() -> RuntimeError | None:
-            tab.click('[data-testid="save"]')
-            error = recorder.error
-            return error if isinstance(error, RuntimeError) else None
-
-        until(a_click, "the fault to be kept as the error of the capture", 10)
+        listened(tab)
+        tab.click('[data-testid="save"]')
+        until(lambda: recorder.error, "the fault to be kept as the error of the capture", 10)
     finally:
         tab.close()
         recorder.stop()
@@ -896,7 +878,7 @@ def test_a_fingerprint_is_cut_whole_and_never_inside_a_character(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
-        tab.wait_loaded()
+        listened(tab)
         tab.run(
             "(() => { const b = document.createElement('button');"
             " b.setAttribute('data-testid', 'a'.repeat(179) + '\\u{1F600}' + 'tail');"
