@@ -3,14 +3,18 @@
 Local brains. Your browser. No credits, no cloud, no telemetry.
 
 **Status: a working prototype with foundations under it. Not production grade.** The
-agent loop, flows and the activity logger work. Under them: a lock file, 1,200 unit and
-contract tests, 7 tests on a real browser, strict types, lint, three import contracts and
-a CI workflow. They pass on the machine this was built on (macOS, arm64) and in CI on
-GitHub's macOS runner; the first green run is
+agent loop, flows and the activity logger work, and so does a new capture of what a person
+does in a page. It is built and tested, and it is not yet the logger: before it replaces
+the old one it runs beside it for three days (see "The capture"). Under them: a lock
+file, 1,401 unit and contract tests, 50 tests on a real browser, strict types, lint,
+three import contracts and a CI workflow. They pass on the machine this was built on
+(macOS, arm64) and in CI on GitHub's macOS runner; the first green run is
 [45566464574](https://github.com/AgenticTony/Seeress/actions/runs/45566464574).
 
 **Not verified.** The personal door's acceptance was last proven on a throwaway Chromium
-that stands where your Chrome does, not on your Chrome.
+that stands where your Chrome does, not on your Chrome. The new capture is proven the same
+way. It has not yet run beside the old logger on a person's own Chrome, which is the step
+before it replaces that logger.
 
 **Verified end-to-end 2026-11-20**: nemotron (Ollama) drove a real browser task
 start-to-finish through the client (local-only) profile.
@@ -35,7 +39,10 @@ Built on open-source parts: browser-use for the browser, Ollama for the model,
 | `bin/seeress-personal "task"` | GLM (cloud) if `ZAI_API_KEY` is set, else Ollama on this machine | your everyday Chrome, through its debugging port |
 | `bin/seeress-client "task"` | Ollama on this machine; no cloud endpoint is listed for it | a Chromium that Seeress starts and owns |
 
-Both scripts run one command line, `python -m seeress.cli --profile personal|client`.
+Both scripts run one command line, `python -m seeress.cli --profile personal|client`. The
+same command line is installed as `seeress` (in `.venv/bin`, after `uv sync`). Where this
+README writes `seeress <command>`, a door runs the same command:
+`./bin/seeress-personal <command>` or `./bin/seeress-client <command>`.
 The profile decides three things, and each is closed on its own:
 
 - **Which model may answer.** Before each model request Seeress reads the hostname of the
@@ -60,6 +67,8 @@ The profile decides three things, and each is closed on its own:
 | Browser with no route out | `tests/e2e/test_route.py`, and the egress check, which asks for a page from an address that is not exempt and requires a refusal |
 | Nothing leaves the machine | `tools/egress_check.py`, a step in CI |
 | Only what an event holds leaves the record | `tests/unit/test_activity.py` and `tests/contract/test_contracts.py`: a site, a path without query or fragment, a tab, a second and an action. No title and no query reaches one |
+| Only what the browser did is a person's | `tests/e2e/test_capture.py`, 43 tests on a browser Seeress starts: a click, an input or a change that a script in the page made is not recorded, and a page that stops its events at the document does not silence the capture |
+| The capture reaches its browser and nothing else | the egress check's third door: the capture asks no model, and no other machine |
 | A failure is a failure | `tests/unit/test_cli.py`: every command exits 1 and prints the reason |
 
 Nothing in the browser tool's own code was changed to get here. Its switches are set from
@@ -80,11 +89,20 @@ name = "tenant"
 base_url = "https://models.tenant.example/v1"
 model = "tenant-large"                         # optional
 api_key_env = "TENANT_KEY"                     # optional
+
+[capture]                                      # every key is optional
+days = ["mon", "tue", "wed", "thu", "fri"]     # Monday to Friday when left out
+from = "08:00"                                 # 08:00 when left out
+to = "18:00"                                   # 18:00 when left out
+keep_days = 30                                 # 30 when left out
 ```
 
 A file Seeress cannot understand stops it. No setting is ever skipped: an ignored one
 could be the one that keeps client pages away from a cloud model. The same
 `client_domains` list names the sites the client door's browser may reach.
+
+`[capture]` is the schedule of the capture: outside it nothing is recorded, and a day of
+the record is deleted once it is more than `keep_days` days before today.
 
 ## Usage
 
@@ -121,11 +139,10 @@ The activity logger notes which site you were on, and when. **Its record holds m
 that today.** The spike logger keeps each tab's address in full, query included, and its
 page title, in a plain file under your home. Seeress reads only the site, the path without
 the query, and the second from it. **A path is shown to you and never sent to a model.**
-What reaches a model about the record is a site, an hour of the day and counts. A new
-capture is being built that records a click, an input, a submit or a select, and never a
-title, a query or typed text; it replaces the spike logger once it has run beside it for
-three days. From the record Seeress finds the patterns of sites that come back on different
-days, and proposes them as flows.
+What reaches a model about the record is a site, an hour of the day and counts. The capture
+described below also records a click, an input, a submit or a select, and never a title, a
+query or typed text. From the record Seeress finds the patterns of sites that come back on
+different days, and proposes them as flows.
 
 ```bash
 seeress mine                      # proposals from your own activity; the evidence first
@@ -143,13 +160,53 @@ A proposal is evidence until you write its goal in your own words, and nothing i
 from a model's sentence. What reaches a model about the record is a site, an hour and
 counts, and `mine` asks a model on the same machine only.
 
+### The capture
+
+A record of what a person does in a page, to be read by the miner and by nothing else. It
+is built and tested on browsers that Seeress starts. It is not yet the logger: it replaces
+the old one only after it has run beside it for three days, and the counts of the two have
+been compared.
+
+```bash
+python -m seeress.capture          # record until it is stopped (Ctrl-C)
+seeress capture-status             # recording since when, or down since when and why
+seeress capture-review             # each day that is held: its events, its size and its kinds
+seeress capture-forget --before 2026-11-01 --yes   # delete every day before that one
+```
+
+With no address, `python -m seeress.capture` reads where Chrome publishes its own for this
+user. So Chrome's remote debugging has to be on, and a second connection to it may raise
+Chrome's approval sheet.
+
+One line of the record, `~/.seeress/watch/activity-YYYYMMDD.jsonl`, holds the site, the
+path with no query and no fragment, the kind (`navigate`, `focus`, `click`, `input`,
+`submit`, `select`), the tab and the second. For a click, an input, a submit or a select it
+also says what was done, and never what a field held:
+
+- the element's tag;
+- how the element is named on its page: the first of a `data-testid`, an `id` that has no
+  digit in it, and a `name`. Digits become `#`. A value is cut at 200 characters. An
+  element that none of the three names is told apart by its place in the page;
+- for an input, the kind of the field. A password, a one-time code and a card are named by
+  their kind, and what was typed is never read.
+
+What it does not do:
+
+- Record outside the schedule in the settings, or past the cap: no tab may put 200 events
+  in the record in one minute.
+- Record in a private window, in a frame inside a page, or on a browser that is Seeress's
+  own.
+- Take what a script in the page did for a person's.
+- Read, move or delete any file of the old logger. Only its own `activity-*.jsonl` is the
+  capture's.
+
 ## Development
 
 ```bash
 uv sync --frozen
 uv run pytest                               # unit and contract tests: no browser, no network
 uv run pytest -m e2e                        # a headless browser on a throwaway profile
-uv run python tools/egress_check.py         # what Seeress contacts, through both doors
+uv run python tools/egress_check.py         # what Seeress contacts, through its three doors
 uv run ruff check && uv run ruff format --check
 uv run mypy && uv run lint-imports
 ```
@@ -218,8 +275,15 @@ uv run python tools/publish_public.py --push
   and Seeress never allows one. The egress check reports it under every door.
 - **The client door's route is a default, not a decision.** A company that lists no sites
   has a browser with no route at all.
-- **A browser body's own storage** (cookies, history) is protected by the OS account and
-  disk encryption, not yet by a vault.
+- **A browser body's own storage** (cookies, history) **and the activity record** are plain
+  files, protected by the OS account and disk encryption, not yet by a vault.
+- **In attach mode the capture cannot tell the agent's tabs from yours.** Every run of the
+  browser tool is noted, and those minutes are left out of the mine.
+- **A page's own script can still make a submit the browser marks as trusted**
+  (`requestSubmit()`), and a script at the very top of a document can stop events before the
+  capture hears any. The first is recorded as a person's; of the second nothing is heard.
+- **Nothing bounds the size of one message from the browser.** A page that logs one very
+  large line to its console makes the capture hold it in memory.
 - **Attach mode is for personal and consultant use.** Chrome and Edge have an administrator
   policy that switches remote debugging off, and an open debugging port lets any local
   program drive a signed-in session. Company deployments need a browser driven from inside
@@ -253,12 +317,13 @@ The plans behind this, and the decisions under them, are not published.
     seeress/config.py       profiles, settings file, domain matching
     seeress/miner.py        finds what repeats in the record: sittings, sequences of sites, gaps
     seeress/proposals.py    the flow and the proposal: what is suggested, what is compiled
-    seeress/capture.py      the capture: a listener in every tab of a browser, and what it reports
+    seeress/capture.py      the capture: its listener, the record it keeps, and the logger
+    seeress/log.py         how Seeress speaks: one handler for the terminal, set once a process
     seeress/activity.py     reads the record into events; writes the capture's events and two notes
     seeress/errors.py       typed errors; each one exits 1
     seeress/watcher.py      activity logger (spike) and analysis
     contracts/              schemas of what crosses a boundary
-    tools/egress_check.py   what Seeress contacts, through both doors
+    tools/egress_check.py   what Seeress contacts, through its three doors
     tools/publish_public.py carries the code over to the public repository
     tests/unit, tests/contract, tests/e2e
     bin/seeress-personal / bin/seeress-client   the two doors
@@ -274,3 +339,4 @@ Records tab events (CDP WebSocket) + focus stream (AppleScript) to
 `~/.seeress/watch/spike-*.jsonl` — everything local, nothing leaves the machine.
 It records only while Chrome's remote debugging is on. Each line holds the tab's address in
 full and the page's title: Seeress reads only the site, the path and the second from it.
+The capture above is built to replace it.
