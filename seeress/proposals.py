@@ -15,8 +15,9 @@ and Proposal.parse are those schemas written by hand, and a contract test keeps 
 agreement.
 """
 
+import hashlib
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,6 +39,11 @@ SITES_AT_MOST = 50
 STEPS_AT_MOST = 50
 INTENT_AT_MOST = 200
 DAYS_AT_MOST = 366
+
+# A name is 40 characters at the most. The last eight are digits of a digest, after a
+# hyphen, and the rest show the sites.
+DIGEST_DIGITS = 8
+SHOWN_AT_MOST = 40 - 1 - DIGEST_DIGITS
 
 FLOW_FIELDS = frozenset({"name", "goal", "sites"})
 PROPOSAL_FIELDS = FLOW_FIELDS | {
@@ -270,3 +276,17 @@ class Proposal:
             status,
             steps,
         )
+
+
+def name_for(sites: Sequence[str]) -> str:
+    """The name of the proposal for a sequence of sites, which is the name of its flow.
+
+    The same sites always have the same name, and two sequences that differ never share
+    one. Each site is written with its dots and its underscores as hyphens, the sites are
+    joined by a hyphen and cut, and eight hexadecimal digits of a digest of the sites
+    follow. So the name is one a flow may have, whatever the sites.
+    """
+    shown = "-".join(site.replace(".", "-").replace("_", "-") for site in sites)
+    shown = re.sub(r"[^a-z0-9-]", "", shown).lstrip("-")[:SHOWN_AT_MOST].rstrip("-")
+    digest = hashlib.sha256("\n".join(sites).encode("utf-8")).hexdigest()[:DIGEST_DIGITS]
+    return f"{shown or 'sites'}-{digest}"

@@ -1,16 +1,20 @@
-"""Finding what repeats in the activity record: sessions, sequences of sites that recur
-across days, and the holes in the record.
+"""Finding what repeats in the activity record: sittings, sequences of sites that recur
+across days, the holes in the record, and the proposals made from all three.
 
 Every test works on invented events and reads no clock: whatever time a test needs is an
 argument. The timestamps are wall-clock times of the machine the tests run on, turned into
 seconds through the same reading the miner uses, so they mean the same in every time zone.
+The model is always a fake that answers with one text.
 """
 
+import json
 from collections.abc import Sequence
+from dataclasses import replace
 
 import pytest
 
-from seeress import activity, miner
+from seeress import activity, miner, proposals
+from seeress.errors import BrainError
 
 # One week, Monday 16 November 2026 to Saturday the 21st.
 MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY = (
@@ -836,3 +840,257 @@ def test_the_default_schedule_is_monday_to_friday_from_eight_to_six() -> None:
     schedule = miner.DEFAULT_SCHEDULE
 
     assert (schedule.days, schedule.start, schedule.end) == (frozenset({0, 1, 2, 3, 4}), 8, 17)
+
+
+# ----------------------------------------------------------------- proposals ---
+
+
+def candidate(sites: Sequence[str], *, order: str = "fixed", path: str = "/") -> miner.Candidate:
+    """A candidate with its evidence invented: three days, and one sitting on each."""
+    return miner.Candidate(
+        sites=tuple(sites),
+        paths=tuple((path,) for _ in sites),
+        days=3,
+        sessions={MONDAY: 1, WEDNESDAY: 1, FRIDAY: 1},
+        first_seen=at(MONDAY, "09:00:00"),
+        last_seen=at(FRIDAY, "09:02:00"),
+        hour=9,
+        order=order,
+    )
+
+
+class Model:
+    """A model that answers with one text, and remembers what it was asked."""
+
+    def __init__(self, answer: str) -> None:
+        self.answer = answer
+        self.prompts: list[str] = []
+
+    def __call__(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return self.answer
+
+
+def answer(*objects: dict[str, object]) -> str:
+    """A model's answer: a list of the objects."""
+    return json.dumps(list(objects))
+
+
+def said(number: object, sentence: object, confidence: object) -> dict[str, object]:
+    """One object of a model's answer. A test passes what a model should not write, too."""
+    return {"n": number, "sentence": sentence, "confidence": confidence}
+
+
+def test_the_prompt_shows_each_candidates_number_and_its_sites_in_order() -> None:
+    candidates = [candidate(["b.example", "a.example"]), candidate(["c.example"])]
+
+    prompt = miner.prompt_for(candidates)
+
+    assert "1. sites: b.example → a.example" in prompt
+    assert "2. sites: c.example" in prompt
+
+
+def test_the_prompt_says_when_the_order_varies() -> None:
+    candidates = [
+        candidate(["a.example", "b.example"]),
+        candidate(["c.example", "d.example"], order="varies"),
+    ]
+
+    prompt = miner.prompt_for(candidates)
+
+    assert prompt.count("the order varies") == 1
+
+
+def test_the_prompt_shows_the_hour_and_the_counts_of_a_candidate() -> None:
+    mine = replace(candidate(["a.example"]), hour=10, sessions={MONDAY: 2, WEDNESDAY: 1, FRIDAY: 4})
+
+    prompt = miner.prompt_for([mine])
+
+    assert "hour 10" in prompt
+    assert "3 days, in 7 sessions" in prompt
+
+
+def test_the_prompt_shows_no_path() -> None:
+    prompt = miner.prompt_for([candidate(["a.example"], path="/invoices/7f3a9c1e/list")])
+
+    assert "invoices" not in prompt
+    assert "7f3a9c1e" not in prompt
+
+
+def test_the_prompt_asks_for_json_of_one_shape_and_nothing_else() -> None:
+    prompt = miner.prompt_for([candidate(["a.example", "b.example"])])
+
+    assert '"n"' in prompt and '"sentence"' in prompt and '"confidence"' in prompt
+    assert "JSON and nothing else" in prompt
+    assert "1 means coincidence" in prompt
+    assert "5 means" in prompt
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        pytest.param(
+            answer(said(1, "Checks mail.", 4), said(2, "Pays invoices.", 2)),
+            [("Checks mail.", 4), ("Pays invoices.", 2)],
+            id="good JSON",
+        ),
+        pytest.param(
+            "Here it is:\n" + answer(said(1, "Checks mail.", 4)) + "\nDone.",
+            [("Checks mail.", 4)],
+            id="JSON inside prose",
+        ),
+        pytest.param(
+            "[Thought] these look like mail. " + answer(said(1, "Checks mail.", 4)),
+            [("Checks mail.", 4)],
+            id="a bracket in the prose before the JSON",
+        ),
+        pytest.param("I see no pattern here.", [("", None)], id="no JSON at all"),
+        pytest.param("Sure: [not json]", [("", None)], id="brackets that hold no JSON"),
+        pytest.param(
+            '{"n": 1, "sentence": "a", "confidence": 3}', [("", None)], id="JSON that is no list"
+        ),
+        pytest.param(
+            answer(said(1, "a", 3), said(7, "b", 5)),
+            [("a", 3)],
+            id="a number that is not one of them",
+        ),
+        pytest.param(answer(said(True, "a", 3)), [("", None)], id="a number that is true"),
+        pytest.param(answer(said(1.0, "a", 3)), [("a", 3)], id="a number written 1.0"),
+        pytest.param(answer(said(2, "b", 4)), [("", None), ("b", 4)], id="a number left out"),
+        pytest.param(
+            answer(said(1, ["not", "text"], 3)), [("", 3)], id="a sentence that is not text"
+        ),
+        pytest.param(
+            answer(said(1, "a", 3), said(1, "b", 5)),
+            [("a", 3)],
+            id="a number twice: the first stands",
+        ),
+        pytest.param(answer(said(1, "a", 4.0)), [("a", 4)], id="a confidence written 4.0"),
+        pytest.param(
+            answer(said(1, "  Checks   mail,\nthen  invoices.  ", 3)),
+            [("Checks mail, then invoices.", 3)],
+            id="whitespace collapsed, and the ends stripped",
+        ),
+        pytest.param(answer(said(1, "x" * 400, 3)), [("x" * 300, 3)], id="a sentence cut at 300"),
+    ],
+)
+def test_the_models_answer_is_read_for_each_candidate(
+    reply: str, expected: list[tuple[str, int | None]]
+) -> None:
+    assert miner.sentences(reply, len(expected)) == expected
+
+
+@pytest.mark.parametrize(
+    "confidence",
+    [0, 6, -1, 4.5, "4", True, None, [4]],
+    ids=["0", "6", "below 1", "a fraction", "text", "true", "null", "a list"],
+)
+def test_a_confidence_that_is_no_integer_from_1_to_5_is_not_kept(confidence: object) -> None:
+    assert miner.sentences(answer(said(1, "Checks mail.", confidence)), 1) == [
+        ("Checks mail.", None)
+    ]
+
+
+def test_a_sentence_that_names_a_site_outside_the_evidence_is_dropped_with_its_confidence() -> None:
+    """The plan's test. A model may not bring a site of its own into a proposal."""
+    mine = candidate(["mail.example.net", "invoices.example.org"])
+    model = Model(answer(said(1, "Checks mail, then files the invoices in dms.example.com.", 5)))
+
+    (found,) = miner.propose([mine], model)
+
+    assert (found.goal, found.confidence) == ("", None)
+
+
+def test_a_sentence_that_names_only_its_own_sites_is_kept() -> None:
+    mine = candidate(["mail.example.net", "intranet_server"])
+    sentence = "Checks Mail.Example.net, then opens intranet_server."
+    model = Model(answer(said(1, sentence, 4)))
+
+    (found,) = miner.propose([mine], model)
+
+    assert (found.goal, found.confidence) == (sentence, 4)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    ["Look at www.example.net first.", "Open http://example.net.", "Write to a@b.example."],
+    ids=["www.", "http", "an at sign"],
+)
+def test_a_sentence_with_www_http_or_an_at_sign_is_dropped(sentence: str) -> None:
+    (found,) = miner.propose([candidate(["a.example"])], Model(answer(said(1, sentence, 4))))
+
+    assert (found.goal, found.confidence) == ("", None)
+
+
+def test_a_sentence_that_names_a_foreign_site_in_capitals_is_dropped() -> None:
+    mine = candidate(["mail.example.net"])
+    model = Model(answer(said(1, "Checks Mail.Example.net, then DMS.Example.com.", 4)))
+
+    (found,) = miner.propose([mine], model)
+
+    assert (found.goal, found.confidence) == ("", None)
+
+
+def test_a_sentence_with_an_at_sign_keeps_no_site_of_its_own_either() -> None:
+    """The at sign alone drops a sentence, whatever sites it names."""
+    mine = candidate(["a.example"])
+    model = Model(answer(said(1, "Writes to someone@a.example about a.example.", 4)))
+
+    (found,) = miner.propose([mine], model)
+
+    assert (found.goal, found.confidence) == ("", None)
+
+
+def test_a_dropped_sentence_leaves_the_other_candidates_alone() -> None:
+    candidates = [candidate(["a.example", "b.example"]), candidate(["c.example", "d.example"])]
+    model = Model(answer(said(1, "ab", 3), said(2, "cd on nowhere.example.org", 5)))
+
+    found = miner.propose(candidates, model)
+
+    assert [(proposal.goal, proposal.confidence) for proposal in found] == [("ab", 3), ("", None)]
+
+
+def test_with_no_model_a_proposal_carries_the_evidence_and_no_sentence() -> None:
+    mine = candidate(["a.example", "b.example"], order="varies", path="/a/{}/x")
+
+    (found,) = miner.propose([mine], None)
+
+    assert (found.goal, found.confidence, found.status) == ("", None, "proposed")
+    assert (found.sites, found.order, found.days, found.hour) == (
+        ("a.example", "b.example"),
+        "varies",
+        3,
+        9,
+    )
+    assert dict(found.sessions) == {MONDAY: 1, WEDNESDAY: 1, FRIDAY: 1}
+    assert (found.first_seen, found.last_seen) == (at(MONDAY, "09:00:00"), at(FRIDAY, "09:02:00"))
+    assert found.name == proposals.name_for(mine.sites)
+    assert proposals.Proposal.parse(found.as_dict()) == found
+
+
+def test_the_model_is_asked_once_about_every_candidate_in_order() -> None:
+    candidates = [candidate(["a.example", "b.example"]), candidate(["c.example"])]
+    model = Model(answer(said(1, "ab", 3), said(2, "c", 5)))
+
+    found = miner.propose(candidates, model)
+
+    assert model.prompts == [miner.prompt_for(candidates)]
+    assert [(proposal.sites, proposal.goal, proposal.confidence) for proposal in found] == [
+        (("a.example", "b.example"), "ab", 3),
+        (("c.example",), "c", 5),
+    ]
+
+
+def test_no_candidate_is_no_proposal_and_the_model_is_not_asked() -> None:
+    model = Model("[]")
+
+    assert miner.propose([], model) == []
+    assert model.prompts == []
+
+
+def test_what_the_model_raises_is_not_caught() -> None:
+    def no_model(prompt: str) -> str:
+        raise BrainError("no model answered")
+
+    with pytest.raises(BrainError, match="no model answered"):
+        miner.propose([candidate(["a.example", "b.example"])], no_model)

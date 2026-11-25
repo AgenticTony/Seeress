@@ -11,14 +11,16 @@ gives out is a site, a path with its identifiers hidden, an hour and counts.
   logger.
 """
 
+import json
 import re
 import time
 from bisect import bisect_left
 from collections import Counter
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 from seeress.activity import TS_FORMAT, Event, Interval, epoch
+from seeress.proposals import Proposal, name_for
 
 # The hole in the record that may pass between two events of one sitting, in seconds.
 SESSION_GAP = 1800
@@ -535,3 +537,157 @@ def _in_schedule(span: Interval, schedule: Schedule) -> list[Interval]:
 def scheduled(start: float, end: float, schedule: Schedule = DEFAULT_SCHEDULE) -> float:
     """How many seconds of the time from start to end fall in the schedule."""
     return sum(part.end - part.start for part in _in_schedule(Interval(start, end), schedule))
+
+
+# ----------------------------------------------------------------- proposals ---
+
+# A model, or whatever stands in for one: a prompt goes in, its answer comes out.
+Ask = Callable[[str], str]
+
+# The most of a model's sentence that is kept.
+SENTENCE_AT_MOST = 300
+
+# A run of text shaped like a host name. A site may hold an underscore, and so may it.
+HOST = re.compile(r"[a-z0-9_-]+(?:\.[a-z0-9_-]+)+")
+
+# What a sentence of a model may not hold, whatever else it says.
+UNWANTED = ("www.", "http", "@")
+
+
+def prompt_for(candidates: Sequence[Candidate]) -> str:
+    """One prompt for every candidate: what a model may see of them, and the answer asked
+    for.
+
+    A model may see a site, an hour and counts, and never a path. The answer is JSON and
+    nothing else: a list with one object for each number, holding its number, one sentence
+    on what the task may be, and a confidence from 1 to 5.
+    """
+    lines = [
+        "A person used a browser at work. Below are groups of sites that came up together",
+        "again and again, on different days. For each group, say in one sentence what task",
+        "it may be part of, and how sure you are that it is one repeated task and not",
+        "coincidence.",
+        "",
+    ]
+    for number, candidate in enumerate(candidates, start=1):
+        order = "the order varies" if candidate.order == "varies" else "always in this order"
+        seen = sum(candidate.sessions.values())
+        lines.append(
+            f"{number}. sites: {' → '.join(candidate.sites)} ({order})"
+            f" · usually starts at hour {candidate.hour}"
+            f" · seen on {candidate.days} days, in {seen} sessions"
+        )
+    lines += [
+        "",
+        "Answer with JSON and nothing else: a list with one object for each number,",
+        '[{"n": 1, "sentence": "<one sentence>", "confidence": 3}, ...].',
+        "A confidence of 1 means coincidence. 5 means surely one repeated task.",
+    ]
+    return "\n".join(lines)
+
+
+def sentences(reply: str, count: int) -> list[tuple[str, int | None]]:
+    """What a model said of each of count candidates: its sentence, and its confidence.
+
+    The first list in the reply that reads as JSON is taken. If there is none, every
+    candidate gets an empty sentence and no confidence, and so does a candidate that no
+    object of the list names. An object that repeats a number is ignored. A sentence is
+    stripped, its whitespace is collapsed, and it is cut at 300 characters. A confidence
+    is kept only as an integer from 1 to 5.
+    """
+    said: dict[int, tuple[str, int | None]] = {}
+    for item in _objects(reply):
+        if not isinstance(item, dict):
+            continue
+        number = _whole(item.get("n"))
+        if number is None or not 1 <= number <= count or number in said:
+            continue
+        said[number] = (_sentence(item.get("sentence")), _confidence(item.get("confidence")))
+    return [said.get(number, ("", None)) for number in range(1, count + 1)]
+
+
+def _objects(reply: str) -> list[object]:
+    """The objects in the first list of the reply that reads as JSON, or none. A bracket in
+    prose before the list loses nothing."""
+    decoder = json.JSONDecoder()
+    position = reply.find("[")
+    while position != -1:
+        try:
+            read, _ = decoder.raw_decode(reply, position)
+        except ValueError:
+            position = reply.find("[", position + 1)
+            continue
+        return list(read) if isinstance(read, list) else []
+    return []
+
+
+def _sentence(value: object) -> str:
+    """The sentence of a model, on one line and no longer than 300 characters."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:SENTENCE_AT_MOST]
+
+
+def _whole(value: object) -> int | None:
+    """A number that is whole, as an integer. None for anything else: a fraction, text,
+    null, and a boolean, which Python counts as 1 and JSON does not."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    return int(value)
+
+
+def _confidence(value: object) -> int | None:
+    """The confidence a model gave, as an integer from 1 to 5, or None when it gave none."""
+    whole = _whole(value)
+    return whole if whole is not None and 1 <= whole <= 5 else None
+
+
+def propose(candidates: Sequence[Candidate], ask: Ask | None) -> list[Proposal]:
+    """One proposal per candidate, in the order given, each with the evidence of its
+    candidate.
+
+    With no model, every goal is empty and every confidence is None. With one, the answer
+    to a single prompt is read for every candidate. A sentence that names a place outside
+    the evidence is dropped, and its confidence with it: a model may not bring a site of
+    its own into a proposal. Nothing a model raises is caught here.
+    """
+    if not candidates:
+        return []
+    if ask is None:
+        said: list[tuple[str, int | None]] = [("", None)] * len(candidates)
+    else:
+        said = sentences(ask(prompt_for(candidates)), len(candidates))
+    made = []
+    for candidate, (sentence, confidence) in zip(candidates, said, strict=True):
+        if sentence and not _names_only(sentence, candidate.sites):
+            sentence, confidence = "", None
+        made.append(
+            Proposal(
+                name_for(candidate.sites),
+                sentence,
+                candidate.sites,
+                candidate.order,
+                candidate.days,
+                dict(candidate.sessions),
+                candidate.first_seen,
+                candidate.last_seen,
+                candidate.hour,
+                confidence,
+                "proposed",
+            )
+        )
+    return made
+
+
+def _names_only(sentence: str, sites: Sequence[str]) -> bool:
+    """True when the sentence names no place that is not one of the sites.
+
+    Every run of text in it shaped like a host name must be one of the sites. And a
+    sentence with www., http or an at sign in it is not kept, whatever it names.
+    """
+    lowered = sentence.lower()
+    if any(unwanted in lowered for unwanted in UNWANTED):
+        return False
+    return all(named in sites for named in HOST.findall(lowered))
