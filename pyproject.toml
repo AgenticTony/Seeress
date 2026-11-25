@@ -105,6 +105,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers -m 'not e2e'"
+# A test still running after this many seconds has every thread's stack printed, and goes
+# on: a browser test was once seen not to end, and nothing said where it stood.
+faulthandler_timeout = 120
 markers = [
     "e2e: needs a real browser; not run by default",
     "git: runs git on a throwaway repository in a temporary folder; may start git and nothing else",
