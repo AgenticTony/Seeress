@@ -217,6 +217,7 @@ The plans behind this, and the decisions under them, are not published.
     seeress/egress.py       judges the record of what Seeress's processes contacted
     seeress/egress_hook.py  writes that record; installed only by the egress check
     seeress/config.py       profiles, settings file, domain matching
+    seeress/miner.py        finds what repeats in the record: sittings, sequences of sites, gaps
     seeress/proposals.py    the flow and the proposal: what is suggested, what is compiled
     seeress/activity.py     reads the activity record into events, and nothing more of it
     seeress/errors.py       typed errors; each one exits 1

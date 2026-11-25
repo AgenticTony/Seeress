@@ -123,6 +123,7 @@ layers = [
     "seeress.egress",
     "seeress.env",
     "seeress.config",
+    "seeress.miner",
     "seeress.proposals",
     "seeress.activity",
     "seeress.errors",

@@ -105,6 +105,26 @@ def ago(seconds: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - seconds))
 
 
+def down(ts: str = TS) -> dict[str, Any]:
+    """A line the logger writes every five seconds while it cannot reach Chrome."""
+    return {"ts": ts, "kind": "chrome_down", "error": "FileNotFoundError"}
+
+
+def connected(ts: str = TS) -> dict[str, Any]:
+    """A line the logger writes when it has reached Chrome."""
+    return {"ts": ts, "kind": "connected", "port": 9222}
+
+
+def agent_run(start: str, end: str) -> dict[str, Any]:
+    """A line of the file of agent runs: from when to when the agent drove the browser."""
+    return {"start": start, "end": end, "what": "task", "name": None}
+
+
+def between(start: str, end: str) -> activity.Interval:
+    """The time from one timestamp of the logger's form to another."""
+    return activity.Interval(activity.epoch(start), activity.epoch(end))
+
+
 def files_under(folder: Path) -> dict[str, tuple[int, bytes]]:
     """Every file under folder, with when it was last written and what it holds."""
     return {
@@ -435,5 +455,261 @@ def test_the_log_files_are_exactly_as_they_were(tmp_path: Path) -> None:
 
     activity.read_events(tmp_path)
     activity.read_events(tmp_path, hours=1)
+
+    assert files_under(tmp_path) == before
+
+
+# ------------------------------------------------- time, and an interval of it ---
+
+
+def test_a_timestamp_is_read_as_the_local_time_of_this_machine() -> None:
+    ts = "2026-11-20T09:15:05"
+
+    assert activity.epoch(ts) == time.mktime(time.strptime(ts, "%Y-%m-%dT%H:%M:%S"))
+
+
+@pytest.mark.parametrize(
+    "ts",
+    [
+        pytest.param("2026-13-45T25:61:61", id="no real date"),
+        pytest.param("2026-11-20", id="a date only"),
+        pytest.param("0999-01-01T00:00:00", id="a year this machine's clock cannot place"),
+    ],
+)
+def test_a_timestamp_that_is_no_time_cannot_be_read(ts: str) -> None:
+    """The schema judges the shape of a ts, not whether it is one."""
+    with pytest.raises(ValueError):
+        activity.epoch(ts)
+
+
+def test_an_interval_holds_both_of_its_ends_and_what_lies_between() -> None:
+    run = activity.Interval(10.0, 20.0)
+
+    assert [run.holds(moment) for moment in (9.0, 10.0, 15.0, 20.0, 21.0)] == [
+        False,
+        True,
+        True,
+        True,
+        False,
+    ]
+
+
+def test_an_interval_that_ends_before_it_starts_is_empty() -> None:
+    backwards = activity.Interval(20.0, 10.0)
+
+    assert backwards.empty
+    assert not backwards.holds(15.0)
+    assert not activity.Interval(10.0, 10.0).empty
+
+
+# --------------------------------------------------------------- the outages ---
+
+
+def test_a_run_of_chrome_down_ends_at_connected(tmp_path: Path) -> None:
+    """While it cannot reach Chrome, the logger writes chrome_down every five seconds."""
+    write(
+        tmp_path,
+        FILE,
+        nav("example.org"),
+        down("2026-11-20T09:15:00"),
+        down("2026-11-20T09:15:05"),
+        down("2026-11-20T09:15:10"),
+        connected("2026-11-20T09:15:15"),
+        nav("example.org", "2026-11-20T09:15:20"),
+    )
+
+    found = activity.read_outages(tmp_path)
+
+    assert found == [between("2026-11-20T09:15:00", "2026-11-20T09:15:15")]
+
+
+@pytest.mark.parametrize(
+    "last",
+    [
+        pytest.param(down("2026-11-20T09:15:10"), id="another chrome_down"),
+        pytest.param({"ts": "2026-11-20T09:15:12", "kind": "spike_stop"}, id="a spike_stop"),
+    ],
+)
+def test_a_run_that_never_ended_ends_at_the_last_line(tmp_path: Path, last: dict[str, Any]) -> None:
+    write(tmp_path, FILE, down("2026-11-20T09:15:00"), down("2026-11-20T09:15:05"), last)
+
+    found = activity.read_outages(tmp_path)
+
+    assert found == [between("2026-11-20T09:15:00", last["ts"])]
+
+
+def test_two_runs_separated_by_connected_are_two(tmp_path: Path) -> None:
+    write(
+        tmp_path,
+        FILE,
+        down("2026-11-20T09:15:00"),
+        connected("2026-11-20T09:15:10"),
+        nav("example.org", "2026-11-20T09:16:00"),
+        down("2026-11-20T09:20:00"),
+        down("2026-11-20T09:20:05"),
+        connected("2026-11-20T09:20:10"),
+    )
+
+    found = activity.read_outages(tmp_path)
+
+    assert found == [
+        between("2026-11-20T09:15:00", "2026-11-20T09:15:10"),
+        between("2026-11-20T09:20:00", "2026-11-20T09:20:10"),
+    ]
+
+
+def test_a_run_that_straddles_two_files_is_one(tmp_path: Path) -> None:
+    """The logger was restarted inside an outage on 2026-11-24, and wrote a new file."""
+    write(
+        tmp_path, "spike-20261120.jsonl", down("2026-11-20T23:59:50"), down("2026-11-20T23:59:55")
+    )
+    write(
+        tmp_path,
+        "spike-20261121.jsonl",
+        {"ts": "2026-11-21T00:00:00", "kind": "spike_start", "pid": 4242},
+        connected("2026-11-21T00:00:05"),
+    )
+
+    found = activity.read_outages(tmp_path)
+
+    assert found == [between("2026-11-20T23:59:50", "2026-11-21T00:00:05")]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param("this line is not JSON", id="not JSON"),
+        pytest.param({"kind": "chrome_down"}, id="no ts"),
+        pytest.param(
+            {"ts": "2026-13-45T25:61:61", "kind": "chrome_down"}, id="a ts that is no time"
+        ),
+        pytest.param({"ts": 20261120091505, "kind": "chrome_down"}, id="a ts that is not text"),
+    ],
+)
+def test_a_line_that_cannot_be_read_is_skipped_and_the_run_goes_on(
+    tmp_path: Path, line: Any
+) -> None:
+    write(tmp_path, FILE, down("2026-11-20T09:15:00"), line, connected("2026-11-20T09:15:10"))
+
+    found = activity.read_outages(tmp_path)
+
+    assert found == [between("2026-11-20T09:15:00", "2026-11-20T09:15:10")]
+
+
+def test_a_connected_line_alone_starts_no_outage(tmp_path: Path) -> None:
+    write(tmp_path, FILE, connected("2026-11-20T09:15:00"), nav("example.org"))
+
+    assert activity.read_outages(tmp_path) == []
+
+
+def test_under_hours_an_outage_that_ended_before_the_cutoff_is_left_out(tmp_path: Path) -> None:
+    write(tmp_path, FILE, down(ago(3 * 3600)), connected(ago(2 * 3600)), nav("example.org"))
+
+    assert activity.read_outages(tmp_path, hours=1) == []
+    assert activity.read_outages(tmp_path) == [between(ago(3 * 3600), ago(2 * 3600))]
+
+
+def test_under_hours_an_outage_that_is_still_running_is_kept(tmp_path: Path) -> None:
+    """A run that never ended may have begun any time ago, and the record may have ended
+    inside it a day ago. It is still going on."""
+    write(tmp_path, FILE, down(ago(40 * 3600)), down(ago(39 * 3600)))
+
+    found = activity.read_outages(tmp_path, hours=1)
+
+    assert found == [between(ago(40 * 3600), ago(39 * 3600))]
+
+
+def test_no_record_is_no_outage(tmp_path: Path) -> None:
+    assert activity.read_outages(tmp_path) == []
+
+
+# ------------------------------------------------------------ the agent's runs ---
+
+RUNS = "agent-runs.jsonl"
+
+
+def test_no_file_of_agent_runs_is_no_run(tmp_path: Path) -> None:
+    assert activity.read_agent_runs(tmp_path) == []
+
+
+def test_each_line_that_reads_is_a_run_in_the_order_written(tmp_path: Path) -> None:
+    write(
+        tmp_path,
+        RUNS,
+        agent_run("2026-11-20T09:00:00", "2026-11-20T09:10:00"),
+        {
+            "start": "2026-11-20T08:20:00",
+            "end": "2026-11-20T08:25:00",
+            "what": "flow",
+            "name": "check-invoices",
+        },
+    )
+
+    found = activity.read_agent_runs(tmp_path)
+
+    assert found == [
+        between("2026-11-20T09:00:00", "2026-11-20T09:10:00"),
+        between("2026-11-20T08:20:00", "2026-11-20T08:25:00"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param({"start": "2026-11-20T09:00:00", "what": "task", "name": None}, id="no end"),
+        pytest.param({"end": "2026-11-20T09:10:00", "what": "task", "name": None}, id="no start"),
+        pytest.param(
+            agent_run("2026-11-20T09:10:00", "2026-11-20T09:00:00"), id="end before start"
+        ),
+        pytest.param(agent_run("2026-11-20", "2026-11-20T09:10:00"), id="start of another shape"),
+        pytest.param(
+            agent_run("2026-13-45T25:61:61", "2026-11-20T09:10:00"), id="start that is no time"
+        ),
+        pytest.param(
+            {"start": 1763926800, "end": "2026-11-20T09:10:00", "what": "task", "name": None},
+            id="start that is not text",
+        ),
+        pytest.param("this line is not JSON", id="not JSON"),
+        pytest.param([], id="not an object"),
+    ],
+)
+def test_a_line_of_the_runs_that_does_not_read_is_skipped(tmp_path: Path, line: Any) -> None:
+    write(tmp_path, RUNS, line, agent_run("2026-11-20T10:00:00", "2026-11-20T10:05:00"))
+
+    found = activity.read_agent_runs(tmp_path)
+
+    assert found == [between("2026-11-20T10:00:00", "2026-11-20T10:05:00")]
+
+
+def test_a_run_that_begins_and_ends_in_one_second_is_a_run(tmp_path: Path) -> None:
+    write(tmp_path, RUNS, agent_run("2026-11-20T10:00:00", "2026-11-20T10:00:00"))
+
+    assert activity.read_agent_runs(tmp_path) == [
+        between("2026-11-20T10:00:00", "2026-11-20T10:00:00")
+    ]
+
+
+def test_under_hours_a_run_that_ended_before_the_cutoff_is_left_out(tmp_path: Path) -> None:
+    write(
+        tmp_path,
+        RUNS,
+        agent_run(ago(3 * 3600), ago(2 * 3600)),
+        agent_run(ago(20 * 60), ago(10 * 60)),
+    )
+
+    found = activity.read_agent_runs(tmp_path, hours=1)
+
+    assert found == [between(ago(20 * 60), ago(10 * 60))]
+
+
+def test_the_readers_of_outages_and_runs_write_nothing(tmp_path: Path) -> None:
+    write(tmp_path, FILE, down("2026-11-20T09:15:00"), connected(), nav("example.org"))
+    write(tmp_path, RUNS, agent_run(TS, "2026-11-20T09:20:00"))
+    before = files_under(tmp_path)
+
+    activity.read_outages(tmp_path)
+    activity.read_outages(tmp_path, hours=1)
+    activity.read_agent_runs(tmp_path)
+    activity.read_agent_runs(tmp_path, hours=1)
 
     assert files_under(tmp_path) == before
