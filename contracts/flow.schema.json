@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seeress://contracts/flow",
+  "title": "Flow",
+  "description": "What Seeress gives the compiler: a name, the goal in the user's own words, and the sites the task visits, in order. Nothing else of the activity record goes into it. In a later phase a flow becomes what the runner executes.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,39}(?![\\s\\S])",
+      "description": "The flow's name, under the same rule as a saved flow: 1 to 40 lower-case letters, digits or hyphens, starting with a letter or a digit"
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": "What the task achieves, in the user's own words"
+    },
+    "sites": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(?!www\\.)[a-z0-9._-]+(?![\\s\\S])",
+        "description": "A site: the host name in lower case, without a leading 'www.' A browser accepts an underscore in a host name, as intranet servers often have one, and so does a site"
+      },
+      "description": "The sites the task visits, in the order of first appearance"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "properties": {
+          "site": {
+            "type": "string",
+            "pattern": "^(?!www\\.)[a-z0-9._-]+(?![\\s\\S])",
+            "description": "A site: the host name in lower case, without a leading 'www.' A browser accepts an underscore in a host name, as intranet servers often have one, and so does a site"
+          },
+          "intent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "What is done on that site"
+          }
+        },
+        "required": ["site", "intent"],
+        "additionalProperties": false
+      },
+      "description": "One step per site, when someone has written what is done there. It is left out until then"
+    }
+  },
+  "required": ["name", "goal", "sites"],
+  "additionalProperties": false
+}

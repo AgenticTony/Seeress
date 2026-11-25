@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seeress://contracts/flow-proposal",
+  "title": "Flow proposal",
+  "description": "A flow with the evidence for it. The evidence is counted, and never written by a model: on how many days and in how many sessions the pattern was seen, when it was first and last seen, and at what hour it usually starts. Two fields are not counted. The goal is a model's one sentence on what the task may be, until the user writes the goal in their own words; writing it approves the proposal. The confidence is the model's, or null when no model was asked.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,39}(?![\\s\\S])",
+      "description": "The flow's name, under the same rule as a saved flow: 1 to 40 lower-case letters, digits or hyphens, starting with a letter or a digit"
+    },
+    "goal": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "What the task may achieve. At first it holds a model's one sentence on that, if there is one. When the user writes the goal, it holds their words"
+    },
+    "sites": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(?!www\\.)[a-z0-9._-]+(?![\\s\\S])",
+        "description": "A site: the host name in lower case, without a leading 'www.' A browser accepts an underscore in a host name, as intranet servers often have one, and so does a site"
+      },
+      "description": "The sites of the pattern. In the order of the pattern when order is 'fixed'; most often seen first when it is 'varies'"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "properties": {
+          "site": {
+            "type": "string",
+            "pattern": "^(?!www\\.)[a-z0-9._-]+(?![\\s\\S])",
+            "description": "A site: the host name in lower case, without a leading 'www.' A browser accepts an underscore in a host name, as intranet servers often have one, and so does a site"
+          },
+          "intent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "What is done on that site"
+          }
+        },
+        "required": ["site", "intent"],
+        "additionalProperties": false
+      },
+      "description": "One step per site, when someone has written what is done there. It is left out until then"
+    },
+    "order": {
+      "type": "string",
+      "enum": ["fixed", "varies"],
+      "description": "Whether the sites recur in the same order"
+    },
+    "days": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "On how many different days the pattern was seen. It is also the number of entries in sessions"
+    },
+    "sessions": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 366,
+      "propertyNames": {
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(?![\\s\\S])"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "description": "Per day, written as YYYY-MM-DD, in how many sessions the pattern was seen"
+    },
+    "first_seen": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?![\\s\\S])",
+      "description": "When the pattern was first seen: the local time of the machine, to the second"
+    },
+    "last_seen": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?![\\s\\S])",
+      "description": "When the pattern was last seen: the local time of the machine, to the second"
+    },
+    "hour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23,
+      "description": "The hour of day at which the pattern most often starts"
+    },
+    "confidence": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 5,
+      "description": "How confident a model is that this is one repeated task and not coincidence, from 1 to 5. Null when no model was asked, or when it said something that was not kept"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["proposed", "approved", "compiled", "dismissed"],
+      "description": "Where the proposal stands. Proposed by the miner; approved by the user writing its goal; compiled into a flow; or dismissed by the user"
+    }
+  },
+  "required": [
+    "name",
+    "goal",
+    "sites",
+    "order",
+    "days",
+    "sessions",
+    "first_seen",
+    "last_seen",
+    "hour",
+    "confidence",
+    "status"
+  ],
+  "additionalProperties": false
+}

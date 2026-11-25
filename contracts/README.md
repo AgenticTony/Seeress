@@ -7,6 +7,8 @@ shape is written down. A boundary is a process, a language or a trust zone:
 |---|---|---|
 | Process: Seeress to the browser tool | [Browser body probe](browser-body-probe.schema.json) | 0 |
 | Trust zone: the activity record to what reads it | [Activity event](activity-event.schema.json) | 1 |
+| Process: the miner to the compiler | [Flow](flow.schema.json) | 1 |
+| Trust zone: the miner to the person who decides | [Flow proposal](flow-proposal.schema.json) | 1 |
 | Process: shell to core | JSON-RPC 2.0 over stdio, one object per line | 2 |
 | Trust zone: device to tenant | The action log, a published flow | 2 |
 | Model output | An action, a compiled flow | 1, 2 |
@@ -18,8 +20,8 @@ Schemas are [JSON Schema](https://json-schema.org/draft/2020-12/schema), draft 2
 - A message is validated where it is read, never only where it is written.
 - A field is never removed and its meaning never changes. Add a field, or add a new
   optional member to an enumeration. Anything else needs a new schema with a new `$id`.
-- `tests/contract/test_contracts.py` proves that each schema and the code that reads its
-  message agree: whatever one accepts, the other accepts, with the same fields.
+- `tests/contract/` proves that each schema and the code that reads its message agree:
+  whatever one accepts, the other accepts, with the same fields.
 - A pattern is written in the ECMA-262 dialect, which every language that reads the schema
   can read. One that must end at the end of a string ends in `(?![\s\S])` and not in `$`: in
   Python, `$` also holds before a final newline.
@@ -44,3 +46,25 @@ one tab or in none, at one second of the machine's local time.
 It carries the host name in lower case without a leading `www.`, and the path with its query
 and its fragment removed. It never carries a page title, typed text, a query, a fragment or
 a full URL. What may reach a model is the site, the path, the hour and counts.
+
+### Flow
+
+What the compiler is given. It is written from a proposal the user has approved, and read by
+`Flow.parse` in `seeress/proposals.py`. It is a name, a goal and one to fifty sites in the
+order the task visits them. Once someone has written what is done on each site, it has a step
+per site that says so. Nothing else of the activity record goes into it: no path, no count,
+no time.
+
+### Flow proposal
+
+What the miner suggests. The miner writes it, and `Proposal.parse` in the same file reads
+it. It is a flow with the evidence for it: on how many days and in how many sessions the
+pattern was seen, when it was first and last seen, and at what hour it usually starts. The
+evidence is counted, and never written by a model.
+
+Two fields are not counted. The goal is a model's one sentence on what the task may be, until
+the user writes the goal in their own words, which approves the proposal. The confidence is
+the model's, from 1 to 5, or null when no model was asked.
+
+A proposal carries sites, an hour, days and counts. It never carries a path, a page title,
+typed text, a query, a fragment or a full URL.
