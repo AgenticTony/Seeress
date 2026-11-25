@@ -5,6 +5,7 @@ the model are replaced by fakes.
 """
 
 import json
+import stat
 from pathlib import Path
 
 import pytest
@@ -68,7 +69,8 @@ class Wire:
 def flows_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     directory = tmp_path / "flows"
     directory.mkdir()
-    monkeypatch.setattr(flows, "FLOWS_DIR", directory)
+    monkeypatch.setattr(flows, "flows_dir", lambda: directory)
+    monkeypatch.setattr(flows, "EXAMPLES_DIR", tmp_path / "no-examples")
     return directory
 
 
@@ -530,3 +532,55 @@ def test_when_the_flow_cannot_be_written_the_proposal_stands_and_the_error_goes_
 
     assert remembered()[-1].status == "approved"
     assert list(flows_dir.iterdir()) == []
+
+
+# ---------------------------------------------------- where a flow is kept ---
+
+
+def test_a_new_flow_is_kept_under_the_seeress_home_and_for_the_user_alone(wired: Wire) -> None:
+    """A flow names the sites a person goes to, so it is the user's. The folder of the code
+    is published: nothing of anyone's is written there. Until 2026-11-25 every flow was."""
+    path = flows.create_flow("check", "open the portal and read the status", profile="client")
+
+    assert path == config.seeress_home() / "flows" / "check.py"
+    assert not path.is_relative_to(flows.EXAMPLES_DIR)
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_the_examples_the_code_ships_with_are_listed_and_runnable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wired: Wire
+) -> None:
+    """Two flows come with the code, as examples. A user who has none by their names sees
+    them, and can run them."""
+    monkeypatch.setattr(flows, "flows_dir", lambda: tmp_path / "flows")  # none of the user's yet
+    assert (flows.EXAMPLES_DIR / "iana-info.py").is_file()
+
+    assert [path.name for path in flows.list_flows()] == ["example-h1.py", "iana-info.py"]
+    assert flows.run_flow("iana-info", profile="client") == "a line of output"
+    assert "iana.org" in wired.steps[-1]
+
+
+def test_a_flow_of_the_user_s_with_the_name_of_an_example_is_the_one_that_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wired: Wire
+) -> None:
+    own = tmp_path / "flows"
+    own.mkdir()
+    monkeypatch.setattr(flows, "flows_dir", lambda: own)
+    (own / "iana-info.py").write_text("# seeress-flow: mine\nprint('mine')\n")
+
+    by_that_name = [path.parent for path in flows.list_flows() if path.stem == "iana-info"]
+    flows.run_flow("iana-info", profile="client")
+
+    assert by_that_name == [own]
+    assert wired.steps == ["# seeress-flow: mine\nprint('mine')\n"]
+
+
+def test_a_scheduled_flow_runs_through_the_script_beside_the_examples() -> None:
+    """The LaunchAgent names the script of the door, which stands beside the code's
+    examples, wherever the flows of the user are."""
+    plist = flows.schedule_plist("iana-info")
+
+    assert f"<string>{flows.EXAMPLES_DIR.parent / 'bin' / 'seeress-client'}</string>" in (
+        plist.read_text()
+    )

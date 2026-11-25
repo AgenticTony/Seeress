@@ -1,9 +1,13 @@
 """Seeress flows: reusable automations.
 
-A flow is a Python file in flows/ that runs inside the browser tool with no model in the
-loop: free, fast and the same every time. The agent writes one from a description
-(`seeress create-flow`), `seeress run` replays it, and `seeress schedule` writes a
-LaunchAgent so it runs without you.
+A flow is a Python file that runs inside the browser tool with no model in the loop: free,
+fast and the same every time. The agent writes one from a description (`seeress
+create-flow`), `seeress run` replays it, and `seeress schedule` writes a LaunchAgent so it
+runs without you.
+
+A flow of the user's is kept under the Seeress home, for the user alone. It names the sites
+a person goes to, and the folder of the code is published. Two examples ship with the code,
+and are listed and run for a user who has none by their names.
 
 A flow runs on a door, so it passes the same door check and the same name check as a task.
 """
@@ -28,7 +32,26 @@ from .errors import FlowError, MiningError, SeeressError, UnsafeCodeError
 from .proposals import Proposal, record, remembered
 from .runner import run_browser_command
 
-FLOWS_DIR = Path(__file__).resolve().parent.parent / "flows"
+# The folder the code is in: its examples of flows, and the scripts of its doors.
+CODE_DIR = Path(__file__).resolve().parent.parent
+
+# The flows that ship with the code, as examples. They are published with it, and so they
+# name no site of anyone's.
+EXAMPLES_DIR = CODE_DIR / "flows"
+
+# The flows of the user are for the user alone, as their folder is.
+PRIVATE = 0o700
+PRIVATE_FILE = 0o600
+
+
+def flows_dir() -> Path:
+    """Where the flows of the user are kept: under the Seeress home.
+
+    Until 2026-11-25 they were kept in the folder of the code, which is published, and a
+    flow compiled from a proposal named the sites of the person it was mined from.
+    """
+    return config.seeress_home() / "flows"
+
 
 # A flow name becomes a file name and part of a LaunchAgent label.
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
@@ -66,8 +89,23 @@ def _check_name(name: str) -> None:
 
 
 def list_flows() -> list[Path]:
-    """The saved flows, in name order."""
-    return sorted(FLOWS_DIR.glob("*.py"))
+    """The saved flows, in name order: the user's own, and then the examples the code ships
+    with that the user has none by the same name."""
+    own = sorted(flows_dir().glob("*.py"))
+    named = {flow.stem for flow in own}
+    return [
+        *own,
+        *(flow for flow in sorted(EXAMPLES_DIR.glob("*.py")) if flow.stem not in named),
+    ]
+
+
+def _flow(name: str) -> Path | None:
+    """The file of a saved flow: the user's own when there is one, else the example."""
+    for folder in (flows_dir(), EXAMPLES_DIR):
+        path = folder / f"{name}.py"
+        if path.is_file():
+            return path
+    return None
 
 
 def run_flow(name: str, profile: str, timeout: float = DEFAULT_TIMEOUT) -> str:
@@ -81,8 +119,8 @@ def run_flow(name: str, profile: str, timeout: float = DEFAULT_TIMEOUT) -> str:
     BrowserError when the browser tool did not exit zero.
     """
     _check_name(name)
-    path = FLOWS_DIR / f"{name}.py"
-    if not path.is_file():
+    path = _flow(name)
+    if path is None:
         existing = ", ".join(flow.stem for flow in list_flows()) or "(none)"
         raise FlowError(f"no flow named {name!r}. existing: {existing}")
     code = path.read_text(encoding="utf-8")
@@ -154,9 +192,11 @@ def create_flow(name: str, description: str, profile: str, max_steps: int = 6) -
             raise FlowError(
                 f"the model wrote code Seeress does not allow ({exc}); refine the description"
             ) from exc
-        FLOWS_DIR.mkdir(exist_ok=True)
-        path = FLOWS_DIR / f"{name}.py"
+        folder = flows_dir()
+        folder.mkdir(mode=PRIVATE, parents=True, exist_ok=True)
+        path = folder / f"{name}.py"
         path.write_text(code.strip() + "\n", encoding="utf-8")
+        path.chmod(PRIVATE_FILE)
         return path
     raise FlowError("the model did not produce a final flow script; refine the description")
 
@@ -213,7 +253,7 @@ def schedule_plist(name: str, every_minutes: int | None = None, daily: str | Non
     if every_minutes is not None and every_minutes < 1:
         raise FlowError("--every needs a number of minutes of at least 1")
 
-    run_script = FLOWS_DIR.parent / "bin" / "seeress-client"  # flows run client-side
+    run_script = EXAMPLES_DIR.parent / "bin" / "seeress-client"  # flows run client-side
     if every_minutes is not None:
         timing = f"<key>StartInterval</key><integer>{every_minutes * 60}</integer>"
     else:
