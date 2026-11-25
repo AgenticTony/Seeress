@@ -19,9 +19,10 @@ TS = "2026-11-20T09:15:05"
 WHEN = activity.epoch(TS)
 TITLE = "a page whose title must never be written"
 QUERY = "a-query-that-must-never-be-written"
-# A browser names a tab by thirty-two hexadecimal characters. An event keeps eight.
-T1 = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d"
-T2 = "9f8e7d6c5b4a39281706f5e4d3c2b1a0"
+# A browser names a tab by thirty-two hexadecimal characters in upper case, and a context
+# by as many. An event keeps eight of a tab's, as they are written.
+T1 = "1A2B3C4D5E6F7A8B9C0D1E2F3A4B5C6D"
+T2 = "9F8E7D6C5B4A39281706F5E4D3C2B1A0"
 
 
 # ------------------------------------------------------------------- a payload ---
@@ -49,7 +50,7 @@ def typed(**changes: Any) -> str:
 
 
 def read(text: str, address: str = "https://example.org/invoices/7") -> activity.Event | None:
-    return capture.event_for(text, address, "1a2b3c4d5e6f", WHEN)
+    return capture.event_for(text, address, T1, WHEN)
 
 
 def test_a_click_on_a_page_becomes_an_event() -> None:
@@ -61,7 +62,7 @@ def test_a_click_on_a_page_becomes_an_event() -> None:
         "click",
         "example.org",
         "/invoices/7",
-        "1a2b3c4d",
+        T1[:8],
         activity.Action("click", "button", 'button[data-testid="save"]', None),
     )
 
@@ -121,6 +122,8 @@ def test_who_is_named_in_an_address_is_not_kept() -> None:
         pytest.param("file:///Users/anna/a-page.html", id="a file on this machine"),
         pytest.param("data:text/html,<b>hi</b>", id="a page of data"),
         pytest.param("https://[::1", id="an address that cannot be split"),
+        pytest.param("https:///no-host/", id="a web address with no host"),
+        pytest.param("http:opaque", id="a web address with no authority"),
         pytest.param("", id="no address yet"),
     ],
 )
@@ -172,7 +175,7 @@ def test_a_tab_is_named_by_eight_characters_and_the_second_is_the_one_given() ->
     event = read(payload())
 
     assert event is not None
-    assert event.target == "1a2b3c4d"
+    assert event.target == T1[:8]
     assert event.ts == TS
 
 
@@ -207,6 +210,15 @@ def test_the_listener_reports_through_the_binding() -> None:
     assert f"window.{capture.BINDING}" in capture.LISTENER
 
 
+def test_the_listener_is_a_script_and_nothing_else() -> None:
+    """It was once written with a backslash before its first line, and so was no script at
+    all: the browser refused it at its first character, and no test on invented messages
+    could see that."""
+    assert capture.LISTENER.startswith("(() => {")
+    assert capture.LISTENER.rstrip().endswith("})();")
+    assert all(line.strip() != "\\" for line in capture.LISTENER.splitlines())
+
+
 def test_the_listener_leaves_a_frame_alone_and_installs_once() -> None:
     assert "window.top !== window" in capture.LISTENER
     assert capture.LISTENER.count("__seeressListening") == 2
@@ -215,14 +227,60 @@ def test_the_listener_leaves_a_frame_alone_and_installs_once() -> None:
 # ---------------------------------------------------- what the browser says ---
 
 
+# A browser names a tab by thirty-two hexadecimal characters, and a context by as many. An
+# event keeps eight of a tab's.
+DEFAULT = "AC94CB6B4ADE5E53B64778803D358969"
+OTHER = "A1B75576658455A5D62CDAF2618221CA"  # a context made as a private window's is
+
+# What the capture asks to begin with, in order.
+OPENING = ["Target.setDiscoverTargets", "Target.getBrowserContexts", "Target.getTargets"]
+
+# A browser names a frame by thirty-two characters too.
+FRAME = "6764B342A115E57CB0DA39C83A95618A"
+INSIDE = "9E8D7C6B5A4F3E2D1C0B9A8F7E6D5C4B"  # a frame inside the page
+WORLD_ID = 7  # what the browser calls the world the listener runs in
+
+
+# What is sent on a session once a tab is attached, and then for each new document.
+ATTACHING = ["Runtime.enable", "Runtime.addBinding", "Page.getFrameTree"]
+LISTENING = ["Page.createIsolatedWorld", "Runtime.evaluate"]
+
+
+def tree_of(frame: str = FRAME) -> dict[str, Any]:
+    """The answer to the third command of attaching: the main frame of the tab."""
+    return {"frameTree": {"frame": {"id": frame, "url": "https://example.org/a"}}}
+
+
+def world(number: int = WORLD_ID) -> dict[str, Any]:
+    """The answer to a command that asks for the world of the capture by name."""
+    return {"executionContextId": number}
+
+
+def document_in(frame: str = FRAME, session: str | None = "S1", number: int = 9) -> dict[str, Any]:
+    """What the browser says when a new document is in a frame: its world of its own."""
+    return {
+        "method": "Runtime.executionContextCreated",
+        "sessionId": session,
+        "params": {
+            "context": {
+                "id": number,
+                "origin": "https://example.org",
+                "name": "",
+                "auxData": {"isDefault": True, "type": "default", "frameId": frame},
+            }
+        },
+    }
+
+
 def info(
     target_id: str = T1,
     *,
     url: str = "https://example.org/a?x=1#top",
     kind: str = "page",
-    context: str | None = None,
+    context: str | None = DEFAULT,
 ) -> dict[str, Any]:
-    """What the browser says about a target: as the browser says it, with a title."""
+    """What the browser says about a target: as the browser says it, with a title and the
+    context it is in."""
     return {
         "targetId": target_id,
         "type": kind,
@@ -232,6 +290,25 @@ def info(
         "canAccessOpener": False,
         "browserContextId": context,
     }
+
+
+def no_context(about: dict[str, Any]) -> dict[str, Any]:
+    """The same, as a browser that names no context on a tab of its default one says it."""
+    return {name: value for name, value in about.items() if name != "browserContextId"}
+
+
+def contexts(default: str | None = DEFAULT) -> dict[str, Any]:
+    """The answer to the second command: which context is the default one. A browser that
+    names none leaves it out."""
+    answer: dict[str, Any] = {"browserContextIds": []}
+    if default is not None:
+        answer["defaultBrowserContextId"] = default
+    return answer
+
+
+def targets(*open: dict[str, Any]) -> dict[str, Any]:
+    """The answer to the third command: which targets are open now."""
+    return {"targetInfos": list(open)}
 
 
 def created(about: dict[str, Any]) -> dict[str, Any]:
@@ -263,12 +340,19 @@ def refused(identifier: int) -> dict[str, Any]:
 
 
 class Held:
-    """A capture on invented messages: what it sent, and what it would write."""
+    """A capture on invented messages, once the browser has answered its first commands:
+    what it sent, and what it would write.
 
-    def __init__(self) -> None:
+    open are the tabs the browser says are open. default is the context it names as its
+    default one, or None for a browser that names none.
+    """
+
+    def __init__(self, *open: dict[str, Any], default: str | None = DEFAULT) -> None:
         self.events: list[activity.Event] = []
         self.sessions = capture.Sessions(self.events.append)
-        self.sent: list[dict[str, Any]] = []
+        self.sent = self.sessions.opens()
+        self.hears(answer(2, contexts(default)))
+        self.hears(answer(3, targets(*open)))
 
     def hears(self, message: object) -> list[dict[str, Any]]:
         commands = self.sessions.hears(message, WHEN)
@@ -279,28 +363,66 @@ class Held:
         (command,) = self.hears(created(info(target_id, **about)))
         return command
 
+    def last(self, method: str) -> dict[str, Any]:
+        """The last command sent with this method."""
+        return [command for command in self.sent if command["method"] == method][-1]
+
+    def listen(self, session: str = "S1", frame: str = FRAME) -> None:
+        """The browser answers the commands that put the listener in the tab: with its main
+        frame, and then with the world the listener runs in."""
+        (asked,) = self.hears(answer(self.last("Page.getFrameTree")["id"], tree_of(frame)))
+        assert asked["method"] == "Page.createIsolatedWorld"
+        (put,) = self.hears(answer(asked["id"], world()))
+        assert put["method"] == "Runtime.evaluate"
+
     def attach(self, target_id: str = T1, session: str = "S1", **about: Any) -> None:
-        """A page the browser has told of, attached now as session."""
+        """A page the browser tells of, attached as session, and listened to."""
         command = self.told_of(target_id, **about)
         self.hears(answer(command["id"], {"sessionId": session}))
+        self.listen(session)
 
     def methods(self) -> list[str]:
         return [command["method"] for command in self.sent]
 
 
-LISTENING = [
-    "Runtime.enable",
-    "Runtime.addBinding",
-    "Page.addScriptToEvaluateOnNewDocument",
-]
-
-
-def test_the_capture_asks_the_browser_to_tell_of_every_target() -> None:
+def test_the_capture_asks_the_browser_three_things_to_begin_with() -> None:
+    """To tell of every target from now on, which context is its default one, and which
+    targets are open now. A browser tells of the tabs already open only when asked."""
     held = Held()
 
-    assert held.sessions.opens() == [
-        {"id": 1, "method": "Target.setDiscoverTargets", "params": {"discover": True}}
-    ]
+    assert [command["method"] for command in held.sent] == OPENING
+    assert held.sent[0]["params"] == {"discover": True}
+    assert held.sent[1]["params"] == {}
+    assert held.sent[2]["params"] == {}
+
+
+def test_the_tabs_already_open_are_attached() -> None:
+    held = Held(info(), info(T2, url="https://two.example/b"))
+
+    assert held.methods() == [*OPENING, "Target.attachToTarget", "Target.attachToTarget"]
+    assert held.sessions.listened == frozenset()
+    held.hears(answer(4, {"sessionId": "S1"}))
+    held.hears(answer(5, {"sessionId": "S2"}))
+    assert held.sessions.listened == frozenset({T1, T2})
+
+
+def test_a_tab_told_of_before_the_browser_said_which_context_is_its_default_is_held() -> None:
+    """A new tab may be told of before the answer comes. It is held, and attached when the
+    browser has said which context is its own."""
+    held = Held()
+    held.sent.clear()
+    held.hears(answer(2, contexts()))  # nothing is held yet, so nothing is attached
+    assert held.sent == []
+
+    sessions = capture.Sessions(lambda event: None)
+    (first, _, _) = (command["id"] for command in sessions.opens())
+
+    assert sessions.hears(created(info()), WHEN) == []  # not yet: its context is unknown
+    (attach,) = sessions.hears(answer(first + 1, contexts()), WHEN)
+
+    assert attach["method"] == "Target.attachToTarget"
+    assert sessions.listened == frozenset()
+    assert sessions.hears(answer(first + 1, contexts()), WHEN) == []  # and only once
 
 
 def test_a_page_of_the_default_context_is_attached_and_listened_to() -> None:
@@ -312,27 +434,83 @@ def test_a_page_of_the_default_context_is_attached_and_listened_to() -> None:
     assert attach["params"] == {"targetId": T1, "flatten": True}
     commands = held.hears(answer(attach["id"], {"sessionId": "S1"}))
 
-    assert [command["method"] for command in commands] == LISTENING
+    assert [command["method"] for command in commands] == ATTACHING
     assert all(command["sessionId"] == "S1" for command in commands)
-    assert commands[1]["params"] == {"name": capture.BINDING, "executionContextName": capture.WORLD}
-    assert commands[2]["params"] == {
-        "source": capture.LISTENER,
-        "worldName": capture.WORLD,
-        "runImmediately": True,
+    assert commands[1]["params"] == {
+        "name": capture.BINDING,
+        "executionContextName": capture.WORLD,
     }
+    held.hears(answer(commands[2]["id"], tree_of()))
+    held.hears(answer(held.last("Page.createIsolatedWorld")["id"], world()))
+    (asked, put) = held.sent[-2:]
+    assert asked["params"] == {"frameId": FRAME, "worldName": capture.WORLD}
+    assert put["params"] == {"expression": capture.LISTENER, "contextId": WORLD_ID}
     # The commands hold the listener, and nothing the browser said about the page.
-    assert TITLE not in json.dumps(commands)
-    assert QUERY not in json.dumps(commands)
+    assert TITLE not in json.dumps(held.sent)
+    assert QUERY not in json.dumps(held.sent)
     assert held.events == []
+
+
+def test_each_new_document_in_the_tab_is_listened_to_again() -> None:
+    """A browser does not run a script registered for new documents in a world of its own.
+    So when it says a new document is in the main frame, the capture asks for its world
+    there and puts the listener in it."""
+    held = Held()
+    held.attach()
+    before = held.methods()
+
+    (asked,) = held.hears(document_in())
+
+    assert asked["params"] == {"frameId": FRAME, "worldName": capture.WORLD}
+    (put,) = held.hears(answer(asked["id"], world(11)))
+
+    assert put["params"] == {"expression": capture.LISTENER, "contextId": 11}
+    assert held.methods() == [*before, *LISTENING]
+    assert held.hears(answer(put["id"], {"result": {}})) == []
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param(document_in(frame=INSIDE), id="a document in a frame inside the page"),
+        pytest.param(document_in(session="S9"), id="a session nothing is held for"),
+        pytest.param(document_in(session=None), id="the browser's own connection"),
+        pytest.param(
+            {
+                "method": "Runtime.executionContextCreated",
+                "sessionId": "S1",
+                "params": {
+                    "context": {
+                        "id": 9,
+                        "name": "seeress",
+                        "auxData": {"isDefault": False, "type": "isolated", "frameId": FRAME},
+                    }
+                },
+            },
+            id="a world of the page's own in the main frame",
+        ),
+    ],
+)
+def test_no_other_context_of_a_tab_starts_a_listener(message: dict[str, Any]) -> None:
+    held = Held()
+    held.attach()
+    before = held.methods()
+
+    assert held.hears(message) == []
+
+    assert held.methods() == before
 
 
 @pytest.mark.parametrize(
     "about",
     [
-        pytest.param(info(context="C1"), id="a page of a second context"),
+        pytest.param(
+            info(context=OTHER), id="a page of a second context, as a private window is in"
+        ),
         pytest.param(info(kind="iframe"), id="a frame that is a target of its own"),
         pytest.param(info(kind="service_worker"), id="a service worker"),
         pytest.param(info(kind="browser"), id="the browser"),
+        pytest.param(info(kind="browser_ui"), id="the browser's own interface"),
         pytest.param(info(kind="other"), id="anything else"),
     ],
 )
@@ -342,6 +520,28 @@ def test_anything_but_a_page_of_the_default_context_is_left_alone(about: dict[st
     assert held.hears(created(about)) == []
     assert held.hears(changed(about)) == []
     assert held.hears(destroyed(about["targetId"])) == []
+    assert held.methods() == OPENING
+
+
+def test_a_page_of_a_second_context_that_is_already_open_is_left_alone() -> None:
+    held = Held(info(context=OTHER), info(T2, context=OTHER, kind="iframe"))
+
+    assert held.methods() == OPENING
+    assert held.sessions.listened == frozenset()
+
+
+def test_a_browser_that_names_no_default_context_has_for_its_own_a_tab_that_names_none() -> None:
+    """An older browser says neither which context is its default one nor which a tab is
+    in, when it is in that one."""
+    held = Held(no_context(info()), default=None)
+
+    assert held.methods() == [*OPENING, "Target.attachToTarget"]
+    assert held.hears(created(info(context=OTHER))) == []
+    assert held.hears(answer(3, targets(no_context(info())))) == []  # told of again
+    (another,) = held.hears(answer(3, targets(no_context(info(T2)))))
+    assert another["method"] == "Target.attachToTarget"  # another that names no context
+    named = Held(default=None)
+    assert named.hears(created(info())) == []  # a tab that names a context is not its own
 
 
 def test_an_event_is_written_when_the_listener_of_a_tab_reports() -> None:
@@ -414,7 +614,7 @@ def test_a_tab_whose_attach_was_refused_is_dropped() -> None:
     command = held.told_of()
 
     assert held.hears(refused(command["id"])) == []
-    assert held.methods() == ["Target.attachToTarget"]
+    assert held.methods() == [*OPENING, "Target.attachToTarget"]
     assert held.sessions.listened == frozenset()
 
     (again,) = held.hears(created(info()))
@@ -428,7 +628,7 @@ def test_a_late_answer_for_a_tab_that_went_away_attaches_nothing() -> None:
     held.hears(destroyed(T1))
 
     assert held.hears(answer(command["id"], {"sessionId": "S1"})) == []
-    assert held.methods() == ["Target.attachToTarget"]
+    assert held.methods() == [*OPENING, "Target.attachToTarget"]
     assert held.sessions.listened == frozenset()
 
 
@@ -437,7 +637,8 @@ def test_a_page_the_browser_tells_of_again_is_not_attached_again() -> None:
     held.attach()
 
     assert held.hears(created(info())) == []
-    assert held.methods() == ["Target.attachToTarget", *LISTENING]
+    assert held.hears(answer(3, targets(info()))) == []
+    assert held.methods() == [*OPENING, "Target.attachToTarget", *ATTACHING, *LISTENING]
 
 
 def test_two_tabs_attaching_at_once_are_each_answered() -> None:
@@ -445,7 +646,7 @@ def test_two_tabs_attaching_at_once_are_each_answered() -> None:
     answers come."""
     held = Held()
     first, second = held.told_of(T1), held.told_of(T2, url="https://two.example/b")
-    assert len({command["id"] for command in held.sent}) == 2
+    assert len({command["id"] for command in held.sent}) == len(OPENING) + 2
 
     late = held.hears(answer(first["id"], {"sessionId": "S1"}))
     early = held.hears(answer(second["id"], {"sessionId": "S2"}))
@@ -482,6 +683,7 @@ def test_what_no_listener_of_the_capture_said_makes_no_event(message: dict[str, 
 def test_a_message_that_says_nothing_the_capture_uses_is_ignored() -> None:
     held = Held()
     held.attach()
+    before = held.methods()
 
     messages: tuple[object, ...] = (
         {"params": {}},
@@ -491,16 +693,21 @@ def test_a_message_that_says_nothing_the_capture_uses_is_ignored() -> None:
         {"method": "Runtime.consoleAPICalled", "sessionId": "S1", "params": {}},
         {"method": "Target.targetCreated", "params": "not an object"},
         {"method": "Target.targetCreated"},
+        {"method": "Target.targetCreated", "params": {"targetInfo": None}},
+        {"method": "Target.targetInfoChanged", "params": {"targetInfo": "not a target"}},
+        {"method": "Target.targetDestroyed", "params": {}},
+        {"method": "Target.browserContextCreated", "params": {"browserContextId": OTHER}},
+        {"method": "Runtime.bindingCalled", "params": {"name": "seeressEvent"}},
         answer(99),
         {"id": "not a number"},
-        {"method": "Target.targetDestroyed", "params": {}},
-        {"method": "Runtime.bindingCalled", "params": {"name": "seeressEvent"}},
+        answer(2, contexts(OTHER)),  # the default context is asked of once, at the start
     )
 
     for message in messages:
         assert held.hears(message) == []
     assert held.events == []
     assert held.sessions.listened == frozenset({T1})
+    assert held.methods() == before
 
 
 # ---------------------------------------------------------------- the recorder ---
