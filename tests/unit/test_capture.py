@@ -69,6 +69,20 @@ def read(text: str, address: str = "https://example.org/invoices/7") -> activity
     return capture.event_for(text, address, T1, WHEN)
 
 
+def test_a_path_over_the_bound_is_cut_to_it_and_the_click_is_kept() -> None:
+    """A page chooses the address of its own tab, and so chose the size of each event: on a
+    real browser one click wrote a line of 2 MB. The path is cut, whole, and the event kept."""
+    made = read(payload(), "https://example.org/" + "a" * 3000)
+
+    assert made is not None
+    assert made.path == "/" + "a" * 2047
+
+
+def test_a_site_over_the_bound_makes_no_event() -> None:
+    """No site has a name that long, and a cut site would be another site."""
+    assert read(payload(), "https://" + "a" * 254 + "/") is None
+
+
 def test_a_click_on_a_page_becomes_an_event() -> None:
     event = read(payload())
 
@@ -1534,7 +1548,15 @@ def test_the_listener_cuts_a_fingerprint_whole_and_where_the_record_can_hold_it(
 """
 
     assert whole in capture.LISTENER
-    assert capture.LISTENER.count(".slice(") == 1  # and nowhere else is anything cut
+    # A page may name a custom element as long as it likes, and the tag is cut in the page
+    # too, at the bound the record allows.
+    tag = f"""
+        tag: Array.from(element.localName).slice(0, {activity.TAG_AT_MOST}).join(""),
+"""
+    assert tag in capture.LISTENER
+    assert (
+        capture.LISTENER.count(".slice(") == 2
+    )  # the fingerprint and the tag: nothing else is cut
 
 
 # ------------------------------------------------- what the loop leaves behind it ---

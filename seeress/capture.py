@@ -127,7 +127,8 @@ LISTENER = r"""(() => {
       if (typeof send !== "function") return;
       const said = {
         type: type,
-        tag: element.localName,
+        // Cut here too: a page may name a custom element as long as it likes.
+        tag: Array.from(element.localName).slice(0, 100).join(""),
         // Cut on code points, and never inside one. Cut on the page's units of sixteen
         // bits, a name that ends in an emoji would end in half of it, and no file could
         // hold the line it is written on.
@@ -260,7 +261,7 @@ def event_for(payload: str, address: str, target: str, when: float) -> Event | N
                 "ts": activity.clock(when),
                 "kind": action.get("type"),
                 "site": host.removeprefix("www."),
-                "path": parts.path or "/",
+                "path": activity.path_at_most(parts.path or "/"),
                 "target": target[:8],
                 "action": action,
             }

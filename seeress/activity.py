@@ -70,6 +70,12 @@ TARGET_SHAPE = re.compile(r"^[0-9a-fA-F]{8}(?![\s\S])")
 # hyphen, and a click often lands on one, so a hyphen, a dot and an underscore may follow.
 TAG_SHAPE = re.compile(r"^[a-z][a-z0-9._-]*(?![\s\S])")
 FINGERPRINT_AT_MOST = 200
+# A page chooses the address of its tab and the name of its element. Before these bounds,
+# one click on a real browser wrote a line of 2 MB, and at 200 events a minute that was
+# 25 GB an hour from one tab.
+SITE_AT_MOST = 253  # no host name is longer
+PATH_AT_MOST = 2048  # all that is kept of a longer path
+TAG_AT_MOST = 100
 
 # How the logger writes the second that ts holds.
 TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
@@ -170,7 +176,9 @@ class Event:
             and _matches(TS_SHAPE, data["ts"])
             and data["kind"] in KINDS
             and _matches(SITE_SHAPE, data["site"])
+            and len(data["site"]) <= SITE_AT_MOST
             and _matches(PATH_SHAPE, data["path"])
+            and len(data["path"]) <= PATH_AT_MOST
             and (data["target"] is None or _matches(TARGET_SHAPE, data["target"]))
         ):
             raise ValueError("the activity event has an unexpected shape")
@@ -198,6 +206,7 @@ def _action_in(data: object, kind: str) -> Action | None:
         kind in ACTION_TYPES
         and data["type"] == kind
         and _matches(TAG_SHAPE, data["tag"])
+        and len(data["tag"]) <= TAG_AT_MOST
         and isinstance(data["fingerprint"], str)
         and 1 <= len(data["fingerprint"]) <= FINGERPRINT_AT_MOST
         and _can_be_written(data["fingerprint"])
@@ -424,6 +433,13 @@ def _event_in(data: dict[str, Any]) -> Event | None:
     return None
 
 
+def path_at_most(path: str) -> str:
+    """The path, cut at PATH_AT_MOST characters and never inside one. The capture cuts one
+    where it makes an event, and the reader cuts one from the older logger's record: an event
+    is cut the same way from either."""
+    return path[:PATH_AT_MOST]
+
+
 def _can_be_written(text: str) -> bool:
     """Whether a file can hold text, as UTF-8. A lone surrogate cannot be written, and a page
     may put one in an attribute that names an element. An action with such a name is refused
@@ -458,7 +474,7 @@ def _from_address(data: Mapping[str, object], kind: str, target: object) -> Even
             "kind": kind,
             # The host name comes out of the address in lower case. One leading www. goes.
             "site": host.removeprefix("www."),
-            "path": address.path or "/",
+            "path": path_at_most(address.path or "/"),
             "target": target,
         }
     )

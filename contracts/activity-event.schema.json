@@ -23,12 +23,14 @@
     "site": {
       "type": "string",
       "pattern": "^(?!www\\.)[a-z0-9._-]+(?![\\s\\S])",
-      "description": "A site: the host name, in lower case, without a leading 'www.' A browser accepts an underscore in a host name, as intranet servers often have one, and so does a site"
+      "maxLength": 253,
+      "description": "A site: the host name, in lower case, without a leading 'www.' A browser accepts an underscore in a host name, as intranet servers often have one, and so does a site. At most 253 characters: no site has a longer name, and an address with one makes no event"
     },
     "path": {
       "type": "string",
       "pattern": "^/",
-      "description": "The URL's path with its query and its fragment removed; '/' when the URL has no path"
+      "maxLength": 2048,
+      "description": "The URL's path with its query and its fragment removed; '/' when the URL has no path. At most 2,048 characters: a page chooses the address of its tab, and a longer path is cut, never inside a character"
     },
     "target": {
       "type": ["string", "null"],
@@ -47,7 +49,8 @@
         "tag": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9._-]*(?![\\s\\S])",
-          "description": "The element's tag name, in lower case. A custom element's name always holds a hyphen, so a tag may"
+          "maxLength": 100,
+          "description": "The element's tag name, in lower case, and at most 100 characters: a page may name a custom element as long as it likes. A custom element's name always holds a hyphen, so a tag may"
         },
         "fingerprint": {
           "type": "string",

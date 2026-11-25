@@ -1100,6 +1100,39 @@ def test_a_lone_surrogate_in_a_name_does_not_end_the_capture(
     assert heard[0].action.fingerprint.encode("utf-8")  # and so a file can hold it
 
 
+def test_a_long_address_or_a_long_tag_makes_no_line_over_its_bound(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """A page chooses the address of its own tab and the name of its own element. Before, one
+    click wrote a line of 2 MB, and at 200 events a minute that was 25 GB an hour from one
+    tab. The path is cut at 2,048 characters and the tag at 100, and the click is kept."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/" + "a" * 3000)  # a page's own long address, by a navigation
+    try:
+        listened(tab)
+        tab.run(
+            "(() => { const b = document.createElement('x-' + 'a'.repeat(5000));"
+            " b.id = 'long'; b.textContent = 'long'; document.body.appendChild(b); })()"
+        )
+        tab.click("#long")
+        heard = until(
+            lambda: recording.of_kind("click") or recording.recorder.error,
+            "a click on the element so named",
+            10,
+        )
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert recording.recorder.error is None, repr(recording.recorder.error)
+    assert len(heard) == 1
+    assert heard[0].path == "/" + "a" * 2047
+    assert heard[0].action is not None
+    assert heard[0].action.tag == "x-" + "a" * 98
+    assert all(len(event.path) <= 2048 for event in recording.events())
+
+
 def test_prose_is_no_name_for_an_element(
     home: Path, browser: tuple[Browser, str], site: str
 ) -> None:

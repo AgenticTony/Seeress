@@ -164,6 +164,10 @@ ACCEPTED_EVENTS = [
     pytest.param({**AN_EVENT, "ts": "2026-13-45T25:61:61"}, id="ts that is no real date"),
     # A browser accepts an underscore in a host name, as intranet servers often have one.
     pytest.param({**AN_EVENT, "site": "my_host.example"}, id="site with an underscore"),
+    # A page chooses the address of its tab. The path and the site are bounded, at the most
+    # a name can be: 2,048 characters of path and 253 of site.
+    pytest.param({**AN_EVENT, "path": "/" + "a" * 2047}, id="a path of 2,048 characters"),
+    pytest.param({**AN_EVENT, "site": "a" * 253}, id="a site of 253 characters"),
 ]
 
 REFUSED_EVENTS = [
@@ -192,6 +196,8 @@ REFUSED_EVENTS = [
     pytest.param({**AN_EVENT, "site": "example.org/invoices"}, id="site with a path"),
     pytest.param({**AN_EVENT, "site": "www.example.org"}, id="site starting with www."),
     pytest.param({**AN_EVENT, "path": "invoices/7"}, id="path not starting with a slash"),
+    pytest.param({**AN_EVENT, "path": "/" + "a" * 2048}, id="a path over 2,048 characters"),
+    pytest.param({**AN_EVENT, "site": "a" * 254}, id="a site over 253 characters"),
     pytest.param({**AN_EVENT, "path": 7}, id="path of another type"),
     pytest.param({**AN_EVENT, "target": "1a2b3c4d5"}, id="target of the wrong length"),
     pytest.param({**AN_EVENT, "target": "1G2B3C4D"}, id="a character that is no hexadecimal digit"),
@@ -285,6 +291,7 @@ FIELDS = (
 
 ACCEPTED_ACTIONS = [
     pytest.param(click(), id="click"),
+    pytest.param(click(tag="x-" + "a" * 98), id="a tag of 100 characters"),
     pytest.param(
         {
             **AN_EVENT,
@@ -321,6 +328,7 @@ ACCEPTED_ACTIONS = [
 
 REFUSED_ACTIONS = [
     pytest.param({**click(), "action": "click"}, id="action that is not an object"),
+    pytest.param(click(tag="x-" + "a" * 99), id="a tag over 100 characters"),
     pytest.param({**click(), "action": ["click"]}, id="action that is a list"),
     pytest.param({**click(), "action": None}, id="action that is null"),
     pytest.param(click(type="navigate"), id="type outside the four: navigate"),

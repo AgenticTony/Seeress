@@ -1148,3 +1148,13 @@ def test_the_reader_asked_for_one_record_reads_that_one_alone(tmp_path: Path) ->
 
     assert [event.site for event in older] == ["one.example.org"]
     assert [event.site for event in own] == ["example.org"]
+
+
+def test_a_long_path_of_the_older_logger_is_cut_as_the_capture_cuts_one(tmp_path: Path) -> None:
+    """A page chose the address then too, and the older logger keeps it in full. An event is
+    cut the same way from either record."""
+    write(tmp_path, FILE, tab_line("nav", "https://example.org/" + "a" * 3000))
+
+    (event,) = activity.read_events(tmp_path)
+
+    assert event.path == "/" + "a" * 2047
