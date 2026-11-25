@@ -129,6 +129,7 @@ layers = [
     "seeress.proposals",
     "seeress.activity",
     "seeress.errors",
+    "seeress.log",
 ]
 
 [[tool.importlinter.contracts]]

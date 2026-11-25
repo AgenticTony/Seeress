@@ -8,7 +8,6 @@ COMMANDS_HELP is what `seeress --help` prints: every command, and how the door i
 
 import argparse
 import contextlib
-import logging
 import os
 import signal
 import sys
@@ -17,7 +16,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from . import bodies, capture, config, flows, mine, watcher
+from . import bodies, capture, config, flows, log, mine, watcher
 from .agent import DEFAULT_MAX_STEPS, chat_session, run_task
 from .errors import BrowserError, SeeressError
 
@@ -51,7 +50,6 @@ beats SEERESS_PROFILE, which beats the default.
 
 # Options that take their value as the next word.
 VALUE_OPTIONS = ("--profile",)
-LOG_FORMAT = "%(message)s"
 
 
 def _parser(command: str | None) -> argparse.ArgumentParser:
@@ -260,15 +258,6 @@ def _split(argv: Sequence[str]) -> tuple[str | None, list[str]]:
     return None, list(argv)
 
 
-def _logging() -> None:
-    logger = logging.getLogger("seeress")
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter(LOG_FORMAT))
-        logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one command. Returns the exit status.
 
@@ -279,7 +268,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     args = list(sys.argv[1:] if argv is None else argv) or ["chat"]
     command, rest = _split(args)
-    _logging()
+    log.to_stderr()
     with _ending_cleanly():
         try:
             return _task(rest) if command is None else COMMANDS[command](rest)
