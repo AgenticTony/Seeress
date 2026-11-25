@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from seeress import bodies, cli, config, flows, watcher
+from seeress import bodies, cli, config, flows, mine, watcher
 from seeress.errors import BrowserError, FlowError, GuardViolation, IsolationError, UnsafeCodeError
 from tests.conftest import Patcher
 
@@ -221,6 +221,47 @@ def test_the_watch_commands_call_the_logger(
 
     assert seen == ["start", "stop", (6.0, False), (None, True)]
     assert capsys.readouterr().out == "started\nstopped\nreport\nreport\n"
+
+
+def test_mine_exits_one_and_names_the_folder_when_nothing_is_recorded(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No record under the throwaway home of the test, and so no model is ever asked."""
+    assert cli.main(["mine", "--no-llm"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "seeress error: " in captured.err
+    assert "watch" in captured.err
+
+
+def test_mine_passes_on_its_hours_and_whether_to_ask_a_model(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: list[tuple[float | None, bool, Path | None]] = []
+
+    def run(hours: float | None = None, *, no_llm: bool = False, home: Path | None = None) -> str:
+        seen.append((hours, no_llm, home))
+        return "report"
+
+    monkeypatch.setattr(mine, "run", run)
+
+    assert cli.main(["mine", "--hours", "6"]) == 0
+    assert cli.main(["mine", "--no-llm"]) == 0
+
+    assert [(hours, no_llm) for hours, no_llm, _ in seen] == [(6.0, False), (None, True)]
+    assert all(home is None for _, _, home in seen)
+    assert capsys.readouterr().out == "report\nreport\n"
+
+
+def test_the_help_of_the_whole_tool_lists_every_command(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["--help"])
+
+    assert exit_info.value.code == 0
+    out = capsys.readouterr().out
+    for command in cli.COMMANDS:
+        assert command in out
 
 
 @pytest.mark.parametrize("error", ERRORS, ids=lambda error: type(error).__name__)

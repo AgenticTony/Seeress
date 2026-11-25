@@ -131,15 +131,16 @@ def epoch(ts: str) -> float:
         raise ValueError("the ts is no time this machine can place") from error
 
 
-def read_events(home: Path, hours: float | None = None) -> list[Event]:
+def read_events(home: Path, hours: float | None = None, *, now: float | None = None) -> list[Event]:
     """The activity events in the record under home, oldest first.
 
     home is the Seeress home. The record is read file by file in file-name order, and the
     events come back in time order. Events that share a second keep the order of the files
-    and of the lines. With hours, only the events of the last hours are returned, by this
-    machine's clock and with each ts read as the machine's local time. Nothing is written.
+    and of the lines. With hours, only the events of the last hours are returned, up to now
+    or, when now is not given, up to the clock. Each ts is read as the machine's local time.
+    Nothing is written.
     """
-    cutoff = _cutoff(hours)
+    cutoff = _cutoff(hours, now)
     events: list[Event] = []
     for data in _lines(home):
         event = _event_in(data)
@@ -151,7 +152,9 @@ def read_events(home: Path, hours: float | None = None) -> list[Event]:
     return sorted(events, key=lambda event: event.ts)
 
 
-def read_outages(home: Path, hours: float | None = None) -> list[Interval]:
+def read_outages(
+    home: Path, hours: float | None = None, *, now: float | None = None
+) -> list[Interval]:
     """Every outage in the record under home, in time order.
 
     While the logger cannot reach the browser it writes chrome_down every few seconds, and
@@ -159,10 +162,10 @@ def read_outages(home: Path, hours: float | None = None) -> list[Interval]:
     chrome_down and ends at the ts of the connected that follows it. A record that ends
     inside an outage ends it at the ts of its last line that can be read, and the outage
     counts as still going on. A line that cannot be read is skipped. With hours, an outage
-    that ended before the cutoff is left out, and one still going on never is. Nothing is
-    written.
+    that ended before the cutoff is left out, and one still going on never is. The cutoff
+    is now, or the clock, less the hours. Nothing is written.
     """
-    cutoff = _cutoff(hours)
+    cutoff = _cutoff(hours, now)
     outages: list[tuple[Interval, bool]] = []
     start: float | None = None
     last = 0.0
@@ -189,15 +192,18 @@ def read_outages(home: Path, hours: float | None = None) -> list[Interval]:
     )
 
 
-def read_agent_runs(home: Path, hours: float | None = None) -> list[Interval]:
+def read_agent_runs(
+    home: Path, hours: float | None = None, *, now: float | None = None
+) -> list[Interval]:
     """The runs of the agent in the record under home, in the order they were written.
 
     The runs are in agent-runs.jsonl, one object per line. Its start is the ts of when a
     run began and its end the ts of when it ended. A missing file is no run. A line whose
     start and end cannot be read, or whose end is before its start, is skipped. With hours,
-    a run that ended before the cutoff is left out. Nothing is written.
+    a run that ended before the cutoff is left out. The cutoff is now, or the clock, less
+    the hours. Nothing is written.
     """
-    cutoff = _cutoff(hours)
+    cutoff = _cutoff(hours, now)
     try:
         lines = (home / "watch" / "agent-runs.jsonl").read_bytes().splitlines()
     except FileNotFoundError:
@@ -213,9 +219,12 @@ def read_agent_runs(home: Path, hours: float | None = None) -> list[Interval]:
     return [run for run in runs if cutoff is None or run.end >= cutoff]
 
 
-def _cutoff(hours: float | None) -> float | None:
-    """The moment, in seconds, before which a reader with hours leaves out what it read."""
-    return None if hours is None else time.time() - hours * 3600
+def _cutoff(hours: float | None, now: float | None) -> float | None:
+    """The moment, in seconds, before which a reader with hours leaves out what it read: now,
+    or the clock when now is not given, less the hours."""
+    if hours is None:
+        return None
+    return (time.time() if now is None else now) - hours * 3600
 
 
 def _lines(home: Path) -> Iterator[dict[str, Any]]:

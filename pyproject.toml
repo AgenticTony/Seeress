@@ -119,6 +119,7 @@ layers = [
     "seeress.flows",
     "seeress.agent",
     "seeress.bodies",
+    "seeress.mine",
     "seeress.brain | seeress.runner | seeress.browser_api",
     "seeress.egress",
     "seeress.env",

@@ -210,6 +210,7 @@ The plans behind this, and the decisions under them, are not published.
     seeress/flows.py        create, list, run, schedule flows
     seeress/agent.py        the loop: model ⇄ python ⇄ browser
     seeress/bodies.py       the browsers behind the two doors, and the marker between them
+    seeress/mine.py          the work of `mine`: the record read, mined and reported
     seeress/brain.py        OpenAI-compatible chat client (stdlib only); endpoint choice
     seeress/browser_api.py  the helper table, the generated prompt, the name allow-list
     seeress/runner.py       runs one step of the browser tool and reports what came back

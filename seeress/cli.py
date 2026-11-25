@@ -3,18 +3,7 @@
 This module parses arguments, prints what the library returns, and turns a SeeressError
 into a reason on stderr and exit status 1. It holds no logic of its own.
 
-  seeress "do a thing"                    one task
-  seeress chat [--companion FILE]         talk, with history
-  seeress run <flow>                      replay a saved flow
-  seeress create-flow <name> <words...>   the agent explores, then writes the flow
-  seeress flows                           list saved flows
-  seeress schedule <flow> [--daily HH:MM | --every N]
-  seeress reload                          restart the browser tool's daemon for a door
-  seeress watch-start | watch-stop        the activity logger
-  seeress watch-analyze [--hours N] [--no-llm]
-
---profile personal or client selects the door. It goes before or after the command, and
-beats SEERESS_PROFILE, which beats the default.
+COMMANDS_HELP is what `seeress --help` prints: every command, and how the door is chosen.
 """
 
 import argparse
@@ -24,11 +13,28 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from . import bodies, config, flows, watcher
+from . import bodies, config, flows, mine, watcher
 from .agent import DEFAULT_MAX_STEPS, chat_session, run_task
 from .errors import BrowserError, SeeressError
 
 Command = Callable[[Sequence[str]], int]
+
+COMMANDS_HELP = """Seeress: your personal browser agent.
+
+  seeress "do a thing"                    one task
+  seeress chat [--companion FILE]         talk, with history
+  seeress run <flow>                      replay a saved flow
+  seeress create-flow <name> <words...>   the agent explores, then writes the flow
+  seeress flows                           list saved flows
+  seeress schedule <flow> [--daily HH:MM | --every N]
+  seeress reload                          restart the browser tool's daemon for a door
+  seeress watch-start | watch-stop        the activity logger
+  seeress watch-analyze [--hours N] [--no-llm]
+  seeress mine [--hours N] [--no-llm]     what repeats in the record, as proposals
+
+--profile personal or client selects the door. It goes before or after the command, and
+beats SEERESS_PROFILE, which beats the default.
+"""
 
 # Options that take their value as the next word.
 VALUE_OPTIONS = ("--profile",)
@@ -38,7 +44,12 @@ LOG_FORMAT = "%(message)s"
 def _parser(command: str | None) -> argparse.ArgumentParser:
     """A parser for one command, or for a bare task when command is None."""
     usage = "seeress" if command is None else f"seeress {command}"
-    parser = argparse.ArgumentParser(prog=usage)
+    parser = argparse.ArgumentParser(
+        prog=usage,
+        # The help of the whole tool lists every command. That of one command does not.
+        description=None if command is not None else COMMANDS_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--profile",
         default=None,
@@ -145,6 +156,17 @@ def _watch_analyze(argv: Sequence[str]) -> int:
     return 0
 
 
+def _mine(argv: Sequence[str]) -> int:
+    parser = _parser("mine")
+    parser.add_argument("--hours", type=float, default=None, help="the last N hours only")
+    parser.add_argument(
+        "--no-llm", action="store_true", help="carry the evidence only, and ask no model"
+    )
+    args = parser.parse_args(argv)
+    print(mine.run(args.hours, no_llm=args.no_llm))
+    return 0
+
+
 COMMANDS: dict[str, Command] = {
     "chat": _chat,
     "run": _run,
@@ -155,6 +177,7 @@ COMMANDS: dict[str, Command] = {
     "watch-start": _watch_start,
     "watch-stop": _watch_stop,
     "watch-analyze": _watch_analyze,
+    "mine": _mine,
 }
 
 

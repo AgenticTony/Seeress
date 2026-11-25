@@ -13,13 +13,21 @@ activity record goes into it.
 The shapes are contracts/flow.schema.json and contracts/flow-proposal.schema.json. Flow.parse
 and Proposal.parse are those schemas written by hand, and a contract test keeps them in
 agreement.
+
+A proposal is remembered under its name, one line per run. What a user decided about it
+outlives the runs: their words in its goal, and whether they approved or dismissed it.
 """
 
 import hashlib
+import json
+import os
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
+
+from seeress.errors import MiningError
 
 # The patterns of the schemas, as they write them, searched for as their validator searches
 # them. A pattern that must end at the end says so with `(?![\s\S])`, which means the same in
@@ -290,3 +298,75 @@ def name_for(sites: Sequence[str]) -> str:
     shown = re.sub(r"[^a-z0-9-]", "", shown).lstrip("-")[:SHOWN_AT_MOST].rstrip("-")
     digest = hashlib.sha256("\n".join(sites).encode("utf-8")).hexdigest()[:DIGEST_DIGITS]
     return f"{shown or 'sites'}-{digest}"
+
+
+# --------------------------------------------------------- keeping a proposal ---
+
+# A proposal names the sites a person goes to and the hours at which they go there. It is
+# for the user alone, and so are its folder and its file.
+PRIVATE = 0o700
+PRIVATE_FILE = 0o600
+
+# What the user decided, as opposed to what the miner or a model said.
+APPROVED = ("approved", "compiled")
+
+
+def folder(home: Path) -> Path:
+    """The folder of the proposals under a Seeress home. It is made when it is missing, for
+    the user alone."""
+    place = home / "proposals"
+    place.mkdir(mode=PRIVATE, parents=True, exist_ok=True)
+    return place
+
+
+def last(home: Path, name: str) -> Proposal | None:
+    """The proposal remembered last under a name, or None when none is.
+
+    A line that does not read is skipped. Nothing is made: to look for a proposal that was
+    never remembered leaves no folder behind.
+    """
+    try:
+        lines = _file(home, name).read_bytes().splitlines()
+    except FileNotFoundError:
+        return None
+    found: Proposal | None = None
+    for line in lines:
+        try:
+            found = Proposal.parse(json.loads(line))
+        except ValueError:  # not JSON, or not a proposal
+            continue
+    return found
+
+
+def remember(home: Path, proposal: Proposal) -> Proposal:
+    """Write the proposal as one more line under its name, and return what was written.
+
+    What was remembered last under the name decides what is kept. If its status is approved
+    or compiled, the new proposal keeps its goal and its status: they are the user's words
+    and the user's decision. If it is dismissed, it stays so. The evidence is always the
+    new one.
+    """
+    before = last(home, proposal.name)
+    if before is not None:
+        if before.status in APPROVED:
+            proposal = replace(proposal, goal=before.goal, status=before.status)
+        elif before.status == "dismissed":
+            proposal = replace(proposal, status="dismissed")
+    path = _file(home, proposal.name)  # a bad name is refused before anything is made
+    folder(home)
+    # The file is given its mode as it is opened, so that it is never readable by another
+    # user, not even between its creation and a change of mode.
+    opened = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, PRIVATE_FILE)
+    with os.fdopen(opened, "a", encoding="utf-8") as file:
+        file.write(json.dumps(proposal.as_dict(), ensure_ascii=False) + "\n")
+    return proposal
+
+
+def _file(home: Path, name: str) -> Path:
+    """The file of the proposals remembered under a name.
+
+    A name that no flow may have names no file: it could be a path to anywhere.
+    """
+    if not NAME_SHAPE.fullmatch(name):
+        raise MiningError(f"the name {name!r} is not a name a flow may have")
+    return home / "proposals" / f"{name}.jsonl"
