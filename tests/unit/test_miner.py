@@ -14,7 +14,7 @@ from dataclasses import replace
 import pytest
 
 from seeress import activity, miner, proposals
-from seeress.errors import BrainError
+from seeress.errors import BrainError, MiningError
 
 # One week, Monday 16 November 2026 to Saturday the 21st.
 MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY = (
@@ -562,17 +562,6 @@ def test_a_set_contained_in_a_found_set_is_not_returned() -> None:
     found = miner.clusters(sittings)
 
     assert [cluster.sites for cluster in found] == [("a", "b", "c")]
-
-
-def test_a_set_of_seven_sites_is_never_looked_for() -> None:
-    """What is found of it is its seven sets of six."""
-    events = [event for day in THREE_DAYS for event in sitting(day, "abcdefg")]
-
-    found = miner.clusters(miner.sessions(events))
-
-    assert len(found) == 7
-    assert {len(cluster.sites) for cluster in found} == {6}
-    assert sorted({site for cluster in found for site in cluster.sites}) == list("abcdefg")
 
 
 def test_the_sites_of_a_cluster_come_by_how_many_sittings_hold_them() -> None:
@@ -1156,3 +1145,128 @@ def test_what_the_model_raises_is_not_caught() -> None:
 
     with pytest.raises(BrainError, match="no model answered"):
         miner.propose([candidate(["a.example", "b.example"])], no_model)
+
+
+# ---------------------------------------------- a group too large to be one task ---
+
+
+def test_a_group_too_large_to_be_one_task_is_not_cut_into_pieces() -> None:
+    """Sixteen sites turn up together, in one sitting, on three days. No six of them is a
+    ritual: the group is one thing, and too large to be one task."""
+    events = [event for day in THREE_DAYS for event in sitting(day, "abcdefghijklmnop")]
+
+    assert miner.clusters(miner.sessions(events)) == []
+
+
+def test_a_set_held_by_a_larger_one_is_no_ritual_even_when_the_larger_is_too_large() -> None:
+    """Seven sites together on three days. Each six of them is held by all seven."""
+    events = [event for day in THREE_DAYS for event in sitting(day, "abcdefg")]
+
+    assert miner.clusters(miner.sessions(events)) == []
+
+
+def test_a_seventh_site_that_is_with_them_on_too_few_days_takes_the_ritual_from_them_never() -> (
+    None
+):
+    """Six sites together on three days, and a seventh with them on two of those days: the
+    six are a ritual."""
+    events = [
+        *sitting(MONDAY, "abcdefg"),
+        *sitting(WEDNESDAY, "abcdefg"),
+        *sitting(FRIDAY, "abcdef"),
+    ]
+
+    (only,) = miner.clusters(miner.sessions(events))
+
+    assert sorted(only.sites) == list("abcdef")
+
+
+def test_the_search_for_clusters_stops_and_says_so_when_there_are_too_many() -> None:
+    """A limit on how many sets the search may hold at once. No record has reached it. It is
+    here so that no record can keep the miner busy for good, and it says so."""
+    events: list[activity.Event] = []
+    for hour, pair in enumerate(("ab", "cd", "ef"), start=9):
+        events += [event for day in THREE_DAYS for event in sitting(day, pair, hour=hour)]
+    sittings = miner.sessions(events)
+
+    with pytest.raises(MiningError, match="too many sets of sites"):
+        miner.clusters(sittings, considered_at_most=2)
+
+    assert len(miner.clusters(sittings, considered_at_most=3)) == 3
+
+
+def test_the_next_midnight_is_found_by_the_calendar_and_not_by_the_clock() -> None:
+    """In the night of 2026-10-24 the clock of this zone goes back an hour. From Friday at
+    nine to Monday at nine there are nine hours of Friday and one of Monday."""
+    friday, monday = activity.epoch("2026-10-23T09:00:00"), activity.epoch("2026-10-26T09:00:00")
+
+    assert miner.scheduled(friday, monday) == 10 * 3600
+
+
+def test_the_prompt_is_exactly_this_for_one_candidate() -> None:
+    """A model may see a site, an hour and counts: not a path, and not when the pattern was
+    first seen."""
+    prompt = miner.prompt_for([candidate(["a.example", "b.example"], order="varies")])
+
+    assert prompt == "\n".join(
+        [
+            "A person used a browser at work. Below are groups of sites that came up together",
+            "again and again, on different days. For each group, say in one sentence what task",
+            "it may be part of, and how sure you are that it is one repeated task and not",
+            "coincidence.",
+            "",
+            "1. sites: a.example → b.example (the order varies) · usually starts at hour 9"
+            " · seen on 3 days, in 3 sessions",
+            "",
+            "Answer with JSON and nothing else: a list with one object for each number,",
+            '[{"n": 1, "sentence": "<one sentence>", "confidence": 3}, ...].',
+            "A confidence of 1 means coincidence. 5 means surely one repeated task.",
+        ]
+    )
+
+
+def test_a_ritual_whose_order_varies_has_one_name_whatever_order_it_is_seen_in() -> None:
+    """Its sites are ordered by how many sittings hold each, and that order changes. Its
+    name does not: a proposal found again is the same proposal, and a decision follows it."""
+    backwards = candidate(["b.example", "a.example"], order="varies")
+    forwards = candidate(["a.example", "b.example"], order="varies")
+    ([one], [two]) = miner.propose([backwards], None), miner.propose([forwards], None)
+
+    assert one.name == two.name
+    assert one.sites == ("b.example", "a.example")
+    assert two.sites == ("a.example", "b.example")
+    (fixed,) = miner.propose([candidate(["b.example", "a.example"])], None)
+    assert fixed.name != one.name
+
+
+OTHER_DAYS = (TUESDAY, THURSDAY, SATURDAY)
+
+
+def test_a_group_too_large_to_be_one_task_ends_the_branch_it_is_reached_by() -> None:
+    """a and b each recur on their own, and with x and with y. Together they are seen only
+    in a group of seven, which is too large to be one task. That group ends the branch: the
+    two pairs are rituals, the search holds a handful of sets, and no six of the seven comes
+    back."""
+    events = [
+        *[event for day in THREE_DAYS for event in sitting(day, "ax", hour=9)],
+        *[event for day in THREE_DAYS for event in sitting(day, "by", hour=10)],
+        *[event for day in OTHER_DAYS for event in sitting(day, "abcdefg", hour=11)],
+    ]
+
+    found = miner.clusters(miner.sessions(events), considered_at_most=10)
+
+    assert [tuple(cluster.sites) for cluster in found] == [("a", "x"), ("b", "y")]
+
+
+def test_a_part_of_a_ritual_is_no_ritual_even_when_seen_on_more_days() -> None:
+    """a and b are seen together on six days, with c on three of them. The ritual is a, b
+    and c. a and b alone are a part of it, on however many days."""
+    events = [
+        *[event for day in THREE_DAYS for event in sitting(day, "abc", hour=9)],
+        *[event for day in OTHER_DAYS for event in sitting(day, "ab", hour=9)],
+    ]
+
+    found = miner.clusters(miner.sessions(events))
+
+    assert [tuple(cluster.sites) for cluster in found] == [("a", "b", "c")]
+    assert found[0].days == 3

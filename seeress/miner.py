@@ -20,6 +20,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 from seeress.activity import TS_FORMAT, Event, Interval, epoch
+from seeress.errors import MiningError
 from seeress.proposals import Proposal, name_for
 
 # The hole in the record that may pass between two events of one sitting, in seconds.
@@ -309,18 +310,34 @@ def _is_identifier(segment: str) -> bool:
 # ------------------------------------------------ rituals whose order varies ---
 
 
-def clusters(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
+# The most sets of sites the search for clusters may hold at once. No record has come near
+# it. It is there so that no record can keep the miner busy for good, and it says so.
+CONSIDERED_AT_MOST = 2_000
+
+
+def clusters(
+    sittings: Sequence[Session], days: int = 3, *, considered_at_most: int = CONSIDERED_AT_MOST
+) -> list[Candidate]:
     """The sets of two to six sites that turn up together in sittings on at least days
     different days, in any order, strongest first.
 
-    A sitting holds a set when every site of the set is among its sites. A set that another
-    found set holds whole is left out. The sites come by how many of all the sittings hold
-    each one, and alphabetically where two tie. The evidence is counted over the sittings
-    that hold the whole set.
+    A sitting holds a set when every site of the set is among its sites. Only a set that no
+    larger found set holds whole is returned: a part of a ritual is not a ritual. So a group
+    of more than six sites that always turn up together gives none. It is one thing, and too
+    large to be one task, and it is not cut into pieces to make some. The sites come by how
+    many of all the sittings hold each one, and alphabetically where two tie. The evidence is
+    counted over the sittings that hold the whole set.
 
-    The sets are found level by level, and each level is built only from the sets of the
-    level before it: a pair is looked for only when both of its sites are found on their
-    own. That is what keeps a month of record from asking after every set there could be.
+    How they are found. A found set is closed when every site that is in every sitting that
+    holds the set belongs to it. The search starts from each site that recurs, closed. From
+    a closed set it steps to a larger one by adding a site and closing again. A step that
+    closes to more than six sites is dropped, because nothing above it can be a set of six
+    or fewer that no larger set holds. A closed set that no site can be added to is one of
+    the largest. Every set the search holds is closed, and two closed sets never hold the
+    same sittings, which is what keeps a month of record from asking after every set there
+    could be.
+
+    Raises MiningError when the search holds more than considered_at_most sets at once.
     """
     if not sittings:
         return []
@@ -339,40 +356,52 @@ def clusters(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
     def found_often_enough(sitters: int) -> bool:
         return sum(1 for day in day_bits if day & sitters) >= days
 
-    # A set is a tuple of its sites in alphabetical order, with the bits of its sittings.
-    every: list[tuple[tuple[str, ...], int]] = [
-        ((site,), sitters)
-        for site, sitters in sorted(holding.items())
-        if found_often_enough(sitters)
-    ]
-    level = every
-    while level and len(level[0][0]) < MOST_SITES:
-        joined: list[tuple[tuple[str, ...], int]] = []
-        # Two found sets that differ only in their last site make one candidate, a site
-        # longer. So each pair is joined once.
-        by_head: dict[tuple[str, ...], list[tuple[str, int]]] = {}
-        for sites, sitters in level:
-            by_head.setdefault(sites[:-1], []).append((sites[-1], sitters))
-        for head, members in by_head.items():
-            for position, (last, first_sitters) in enumerate(members):
-                for other, second_sitters in members[position + 1 :]:
-                    sitters = first_sitters & second_sitters
-                    if found_often_enough(sitters):
-                        joined.append(((*head, last, other), sitters))
-        every.extend(joined)
-        level = joined
+    def closed(sitters: int) -> frozenset[str]:
+        """The sites that every sitting among sitters holds. The sittings that hold all of
+        them are exactly sitters."""
+        return frozenset(site for site, holds in holding.items() if holds & sitters == sitters)
 
-    # Of the found sets, only the largest: the longest first, so that a part finds a whole
-    # to be held by. A site on its own was only the first step towards a pair.
+    # What is held: each closed set with the bits of the sittings that hold it, and the
+    # largest so far.
+    level: list[tuple[frozenset[str], int]] = []
+    seen: set[frozenset[str]] = set()
+    for sitters in sorted(holding.values()):
+        if found_often_enough(sitters):
+            whole = closed(sitters)
+            if len(whole) <= MOST_SITES and whole not in seen:
+                seen.add(whole)
+                level.append((whole, sitters))
     largest: list[tuple[frozenset[str], int]] = []
-    for sites, sitters in sorted(every, key=lambda item: (-len(item[0]), item[0])):
-        if len(sites) < LEAST_SITES:
-            continue
-        whole = frozenset(sites)
-        if all(not whole < found for found, _ in largest):
-            largest.append((whole, sitters))
-    found = [_cluster(whole, sitters, sittings, holding) for whole, sitters in largest]
-    return by_strength(found)
+    while level:
+        following: list[tuple[frozenset[str], int]] = []
+        for whole, sitters in level:
+            added = False
+            for site, holds in sorted(holding.items()):
+                then = sitters & holds
+                if site in whole or not found_often_enough(then):
+                    continue
+                added = True
+                grown = closed(then)
+                if len(grown) <= MOST_SITES and grown not in seen:
+                    seen.add(grown)
+                    following.append((grown, then))
+            if not added:
+                largest.append((whole, sitters))
+        level = following
+        if len(seen) > considered_at_most:
+            raise MiningError(
+                f"too many sets of sites come back together in this record: the search held"
+                f" more than {considered_at_most}, and was stopped. Mine fewer hours:"
+                " seeress mine --hours 168"
+            )
+    # A site on its own was only the first step towards a pair.
+    return by_strength(
+        [
+            _cluster(whole, sitters, sittings, holding)
+            for whole, sitters in largest
+            if len(whole) >= LEAST_SITES
+        ]
+    )
 
 
 def _cluster(
@@ -652,6 +681,16 @@ def _confidence(value: object) -> int | None:
     return whole if whole is not None and 1 <= whole <= 5 else None
 
 
+def name_of(candidate: Candidate) -> str:
+    """The name of the proposal for a candidate.
+
+    A sequence is named by its sites in their order. A ritual whose order varies is named by
+    its sites in alphabetical order: the order it is seen in changes from one run to the
+    next, and a proposal found again must be the same proposal, for a decision to follow it.
+    """
+    return name_for(candidate.sites if candidate.order == "fixed" else sorted(candidate.sites))
+
+
 def propose(candidates: Sequence[Candidate], ask: Ask | None) -> list[Proposal]:
     """One proposal per candidate, in the order given, each with the evidence of its
     candidate.
@@ -673,7 +712,7 @@ def propose(candidates: Sequence[Candidate], ask: Ask | None) -> list[Proposal]:
             sentence, confidence = "", None
         made.append(
             Proposal(
-                name_for(candidate.sites),
+                name_of(candidate),
                 sentence,
                 candidate.sites,
                 candidate.order,
