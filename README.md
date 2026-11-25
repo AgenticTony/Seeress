@@ -170,13 +170,17 @@ been compared.
 ```bash
 python -m seeress.capture          # record until it is stopped (Ctrl-C)
 seeress capture-status             # recording since when, or down since when and why
-seeress capture-review             # each day that is held: its events, its size and its kinds
+seeress capture-review             # each day the capture holds, and each day the older logger holds
 seeress capture-forget --before 2026-11-01 --yes   # delete every day before that one
 ```
 
 With no address, `python -m seeress.capture` reads where Chrome publishes its own for this
 user. So Chrome's remote debugging has to be on, and a second connection to it may raise
 Chrome's approval sheet.
+
+While both records exist, the mine reads both and `capture-review` shows both: a line for
+each day of the older logger too, with its events by kind, so that the two can be compared
+day by day before one replaces the other.
 
 One line of the record, `~/.seeress/watch/activity-YYYYMMDD.jsonl`, holds the site, the
 path with no query and no fragment, the kind (`navigate`, `focus`, `click`, `input`,
