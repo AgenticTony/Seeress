@@ -235,3 +235,14 @@ def test_remembered_proposals_are_for_the_user_alone(tmp_path: Path) -> None:
     assert stat.S_IMODE(file.stat().st_mode) == 0o600
     assert stat.S_IMODE(file.parent.stat().st_mode) == 0o700
     assert os.access(file, os.R_OK)
+
+
+def test_two_sequences_whose_shown_part_is_the_same_are_told_apart_by_their_digest() -> None:
+    """The shown part of a name is cut at thirty-one characters. Beyond the cut only the
+    digest tells two sequences apart, and it does."""
+    long = "site" * 6  # with its dot and its tail, the first site runs past the cut
+    first = [f"{long}.example", "one.example"]
+    second = [f"{long}.example", "two.example"]
+
+    assert proposals.name_for(first)[:31] == proposals.name_for(second)[:31]
+    assert proposals.name_for(first) != proposals.name_for(second)

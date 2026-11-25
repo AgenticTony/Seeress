@@ -486,6 +486,8 @@ def test_stopping_the_capture_ends_its_thread_and_the_page_is_listened_to_no_mor
     tab = own.tab(f"{site}/")
     try:
         tab.wait_loaded()
+        tab.click('[data-testid="save"]')
+        (heard,) = until(lambda: recording.of_kind("click"), "a click before the stop", 10)
         alive = recording.recorder.running
         assert alive is True
 
@@ -495,7 +497,7 @@ def test_stopping_the_capture_ends_its_thread_and_the_page_is_listened_to_no_mor
         assert recording.recorder.error is None
         tab.click('[data-testid="save"]')
         waited_a_moment()
-        assert recording.events() == []
+        assert recording.events() == [heard]  # the one from before, and no more
     finally:
         tab.close()
         recording.stop()  # and a second stop is nothing

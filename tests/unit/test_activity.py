@@ -5,7 +5,10 @@ logger writes: page titles, full addresses with their queries, and lines about t
 itself. Only the site, the path, the kind, the tab and the second may come out of it.
 """
 
+import errno
+import io
 import json
+import os
 import stat
 import time
 from pathlib import Path
@@ -1104,3 +1107,26 @@ def test_a_second_is_due_exactly_when_a_minute_from_it_holds_scheduled_time() ->
     for minute in range(3 * 24 * 60):
         when = friday + minute * 60
         assert activity.due(when) == (miner.scheduled(when, when + 1) == 1), when
+
+
+def test_a_line_that_does_not_go_in_is_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A disk that is full is this failure: the folder is there and the file opens, and the
+    line does not go in. It is raised, and the file is left empty."""
+
+    class Full(io.StringIO):
+        def write(self, text: str) -> int:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+    def opened_full(fd: int, *args: object, **options: object) -> Full:
+        os.close(fd)  # the file is made, as it would be on a disk that is full
+        return Full()
+
+    monkeypatch.setattr(os, "fdopen", opened_full)
+
+    with pytest.raises(OSError, match="No space left on device"):
+        activity.write_event(tmp_path, click(), now=WRITTEN_AT)
+
+    (path,) = (tmp_path / "watch").iterdir()
+    assert path.read_text(encoding="utf-8") == ""
