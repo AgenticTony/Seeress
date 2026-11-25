@@ -120,11 +120,12 @@ smoke-test target).
 The activity logger notes which site you were on, and when. **Its record holds more than
 that today.** The spike logger keeps each tab's address in full, query included, and its
 page title, in a plain file under your home. Seeress reads only the site, the path without
-the query, and the second from it, and only those ever reach a model. A new capture is being
-built that records a click, an input, a submit or a select, and never a title, a query or
-typed text; it replaces the spike logger once it has run beside it for three days. From the
-record Seeress finds the patterns of sites that come back on different days, and proposes
-them as flows.
+the query, and the second from it. **A path is shown to you and never sent to a model.**
+What reaches a model about the record is a site, an hour of the day and counts. A new
+capture is being built that records a click, an input, a submit or a select, and never a
+title, a query or typed text; it replaces the spike logger once it has run beside it for
+three days. From the record Seeress finds the patterns of sites that come back on different
+days, and proposes them as flows.
 
 ```bash
 seeress mine                      # proposals from your own activity; the evidence first
