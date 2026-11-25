@@ -1063,3 +1063,62 @@ def test_prose_is_no_name_for_an_element(
     written = recording.written()
     for word in ("Order", "4711", "Anna", "paid", "aria"):
         assert word not in written
+
+
+# -------------------------------------------------- a page cannot silence the capture ---
+
+
+def test_a_page_that_stops_its_events_going_further_cannot_silence_the_capture(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """A page may stop every event at the window, so that nothing lower down hears it. The
+    capture's listener sits on the window too, and hears first."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        tab.run(
+            "for (const type of ['click', 'input', 'change', 'submit'])"
+            " window.addEventListener(type, (event) => event.stopPropagation(), true);"
+        )
+        tab.click('[data-testid="save"]')
+        (event,) = until(lambda: recording.of_kind("click"), "a click event", 10)
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert event.action == activity.Action("click", "button", 'button[data-testid="save"]', None)
+
+
+def test_the_capture_hears_again_after_a_page_opens_its_document_again(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """Opening a document again takes away every listener of its window and keeps the
+    world the listener ran in. A script that writes to a loaded page does this, and the
+    tab would have been deaf until it navigated."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        for opening in (1, 2):
+            tab.run(
+                "document.open(); document.write('<button data-testid=\"save\">Save</button>');"
+                " document.close();"
+            )
+            waited_a_moment()
+            tab.click('[data-testid="save"]')
+            until(
+                lambda opening=opening: len(recording.of_kind("click")) == opening,
+                f"click number {opening}, after reopening number {opening}",
+                10,
+            )
+        one, two = recording.of_kind("click")
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert [event.action for event in (one, two)] == [
+        activity.Action("click", "button", 'button[data-testid="save"]', None)
+    ] * 2

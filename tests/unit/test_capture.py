@@ -1480,3 +1480,35 @@ def test_the_listener_takes_only_what_the_browser_did() -> None:
     gate = "          if (!event.isTrusted) return;\n          work(event);\n"
 
     assert gate in capture.LISTENER
+
+
+def test_the_listener_sits_on_the_window_and_hears_first() -> None:
+    """A page may stop its events from going further, at the document or lower down, so
+    that nothing there hears them. The window hears first, and the listener sits on it."""
+    sits = "      window.addEventListener(type, handler, true);\n"
+
+    assert sits in capture.LISTENER
+    assert "document.addEventListener" not in capture.LISTENER
+
+
+def test_an_error_of_the_listener_never_reaches_the_page() -> None:
+    """What the listener does with an event is wrapped, so that a fault of its own is
+    nothing to the page."""
+    wrapped = (
+        "          work(event);\n"
+        "        } catch (error) {\n"
+        "          // Nothing of this listener's may reach the page.\n"
+        "        }\n"
+    )
+
+    assert wrapped in capture.LISTENER
+
+
+def test_the_listener_puts_itself_back_when_the_document_is_opened_again() -> None:
+    """Opening a document again takes away every listener of the window and keeps the
+    world the listener ran in. So the flag that keeps the listener to one in a document
+    would keep it out for good."""
+    watches = "    }).observe(document, { childList: true });\n"
+
+    assert watches in capture.LISTENER
+    assert capture.LISTENER.count("window.addEventListener(type, handler, true);") == 2

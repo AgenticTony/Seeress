@@ -159,6 +159,9 @@ LISTENER = r"""(() => {
     // Each listener is wrapped, so that nothing of this listener's may reach the page. And
     // only what the browser itself did is the person's: a page's script can say that a
     // click, an input or a change happened, and the browser does not trust what it says.
+    // Each sits on the window, where it hears first: a page that stops its events from
+    // going further, at the document or below, cannot keep them from it.
+    const handlers = [];
     const on = (type, work) => {
       const handler = (event) => {
         try {
@@ -168,7 +171,8 @@ LISTENER = r"""(() => {
           // Nothing of this listener's may reach the page.
         }
       };
-      document.addEventListener(type, handler, true);
+      handlers.push([type, handler]);
+      window.addEventListener(type, handler, true);
     };
 
     on("click", (event) => {
@@ -193,6 +197,20 @@ LISTENER = r"""(() => {
     on("focusout", (event) => {
       if (typing === event.target) typing = null;
     });
+
+    // A page that opens its document again takes away every listener of the window and
+    // keeps this world, so that the flag above would keep the listener out for good. A
+    // script that writes to a loaded page does this. When the children of the document
+    // itself are taken away, the listeners are put back.
+    const arm = () => {
+      for (const [type, handler] of handlers) window.addEventListener(type, handler, true);
+    };
+    new MutationObserver((records) => {
+      const reopened = records.some((record) =>
+        Array.from(record.removedNodes).some((node) => node.nodeName === "HTML")
+      );
+      if (reopened) arm();
+    }).observe(document, { childList: true });
   } catch (error) {
     // Nothing of this listener's may reach the page.
   }
