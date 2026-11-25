@@ -586,6 +586,7 @@ def test_the_capture_takes_no_notice_of_any_cookie_but_the_marker(
     recording = record_on(home, address)
     tab = own.tab(f"{site}/")
     try:
+        tab.wait_loaded()  # a click on a page that is not there yet is no click
 
         def a_click() -> list[activity.Event]:
             tab.click('[data-testid="save"]')
