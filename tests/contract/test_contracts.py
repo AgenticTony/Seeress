@@ -155,6 +155,9 @@ ACCEPTED_EVENTS = [
         {**AN_EVENT, "kind": "submit", "site": "intranet.corp", "path": "/a/b/"}, id="submit"
     ),
     pytest.param({**AN_EVENT, "kind": "select", "target": "5e6f7a8b"}, id="select"),
+    # A browser names a tab in upper case. The reader refused it from the first, and so
+    # read no line of the spike logger that named a tab.
+    pytest.param({**AN_EVENT, "kind": "navigate", "target": "D3DED672"}, id="a tab in upper case"),
     # JSON has one kind of number, so 1.0 is 1.
     pytest.param({**AN_EVENT, "v": 1.0}, id="v written 1.0"),
     # The schema judges the shape of a ts, not whether the date exists.
@@ -191,7 +194,7 @@ REFUSED_EVENTS = [
     pytest.param({**AN_EVENT, "path": "invoices/7"}, id="path not starting with a slash"),
     pytest.param({**AN_EVENT, "path": 7}, id="path of another type"),
     pytest.param({**AN_EVENT, "target": "1a2b3c4d5"}, id="target of the wrong length"),
-    pytest.param({**AN_EVENT, "target": "1A2B3C4D"}, id="target of other characters"),
+    pytest.param({**AN_EVENT, "target": "1G2B3C4D"}, id="a character that is no hexadecimal digit"),
     pytest.param({**AN_EVENT, "target": 7}, id="target of another type"),
     pytest.param(
         {name: value for name, value in AN_EVENT.items() if name != "target"},

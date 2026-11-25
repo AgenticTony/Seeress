@@ -32,8 +32,8 @@
     },
     "target": {
       "type": ["string", "null"],
-      "pattern": "^[0-9a-f]{8}(?![\\s\\S])",
-      "description": "The tab, by the first eight characters of its identifier, or null when the logger cannot name it"
+      "pattern": "^[0-9a-fA-F]{8}(?![\\s\\S])",
+      "description": "The tab, by the first eight characters of its identifier as the browser writes it, which is hexadecimal in upper case; or null when the logger cannot name it"
     },
     "action": {
       "type": "object",

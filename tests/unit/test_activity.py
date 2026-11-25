@@ -147,6 +147,18 @@ def test_a_tab_line_becomes_a_navigate_event(tmp_path: Path, kind: str) -> None:
     ]
 
 
+def test_a_tab_is_read_as_the_browser_names_it_in_upper_case(tmp_path: Path) -> None:
+    """The reader refused the upper case from the first. So it read no line the spike logger
+    wrote about a tab, and on the real record only the lines that name no tab were read."""
+    line = tab_line("nav", "https://example.org/invoices/7")
+    line["target"] = "D3DED672"
+    write(tmp_path, FILE, line)
+
+    assert activity.read_events(tmp_path) == [
+        activity.Event(1, TS, "navigate", "example.org", "/invoices/7", "D3DED672")
+    ]
+
+
 def test_the_query_and_the_fragment_are_dropped(tmp_path: Path) -> None:
     write(tmp_path, FILE, tab_line("nav", "https://example.org/invoices/7?tab=all&hide=paid#top"))
 

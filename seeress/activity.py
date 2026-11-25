@@ -63,7 +63,9 @@ EVENT_FIELDS = frozenset({"v", "ts", "kind", "site", "path", "target"})
 TS_SHAPE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?![\s\S])")
 SITE_SHAPE = re.compile(r"^(?!www\.)[a-z0-9._-]+(?![\s\S])")
 PATH_SHAPE = re.compile(r"^/")
-TARGET_SHAPE = re.compile(r"^[0-9a-f]{8}(?![\s\S])")
+# A tab is named as the browser names it: hexadecimal in upper case. The lower case is taken
+# too, for a record written by a hand that did not know that.
+TARGET_SHAPE = re.compile(r"^[0-9a-fA-F]{8}(?![\s\S])")
 # A tag is in lower case and starts with a letter. A custom element's name always holds a
 # hyphen, and a click often lands on one, so a hyphen, a dot and an underscore may follow.
 TAG_SHAPE = re.compile(r"^[a-z][a-z0-9._-]*(?![\s\S])")
