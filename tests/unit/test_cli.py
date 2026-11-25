@@ -8,7 +8,14 @@ from pathlib import Path
 import pytest
 
 from seeress import bodies, cli, config, flows, mine, watcher
-from seeress.errors import BrowserError, FlowError, GuardViolation, IsolationError, UnsafeCodeError
+from seeress.errors import (
+    BrowserError,
+    CaptureError,
+    FlowError,
+    GuardViolation,
+    IsolationError,
+    UnsafeCodeError,
+)
 from tests.conftest import Patcher
 
 ERRORS = [
@@ -17,6 +24,7 @@ ERRORS = [
     UnsafeCodeError("line 1: a step may not import anything"),
     BrowserError("the browser tool exited with code 1"),
     FlowError("no flow named 'nope'"),
+    CaptureError("This browser is Seeress's own: it carries the marker."),
 ]
 
 

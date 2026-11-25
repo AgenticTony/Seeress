@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from seeress import activity, watcher
+from seeress import activity, miner, watcher
 
 TS = "2026-11-20T09:15:05"
 FILE = "spike-20261120.jsonl"
@@ -1079,3 +1079,28 @@ def test_under_hours_an_outage_that_straddles_the_cutoff_is_kept(tmp_path: Path)
     write(tmp_path, FILE, down(ago(90 * 60)), connected(ago(30 * 60)))
 
     assert activity.read_outages(tmp_path, hours=1) == [between(ago(90 * 60), ago(30 * 60))]
+
+
+# ---------------------------------------------------------------- the schedule ---
+
+
+def test_a_second_is_due_in_the_schedule_or_not() -> None:
+    due = activity.epoch
+
+    assert activity.due(due("2026-11-20T09:15:00"))  # Friday, at work
+    assert not activity.due(due("2026-11-20T07:59:59"))  # before the first hour
+    assert activity.due(due("2026-11-20T08:00:00"))
+    assert activity.due(due("2026-11-20T17:59:59"))  # in the last hour
+    assert not activity.due(due("2026-11-20T18:00:00"))
+    assert not activity.due(due("2026-11-21T10:00:00"))  # a Saturday
+    assert activity.due(due("2026-11-21T10:00:00"), activity.Schedule(frozenset({5}), 10, 11))
+
+
+def test_a_second_is_due_exactly_when_a_minute_from_it_holds_scheduled_time() -> None:
+    """Two readings of one schedule: due, for a second, and scheduled, for a stretch. They
+    agree on every minute of three days, one of them a Sunday."""
+    friday = activity.epoch("2026-11-20T00:00:00")
+
+    for minute in range(3 * 24 * 60):
+        when = friday + minute * 60
+        assert activity.due(when) == (miner.scheduled(when, when + 1) == 1), when

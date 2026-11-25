@@ -37,6 +37,10 @@ class FlowError(SeeressError):
     """A saved flow is missing or cannot be used."""
 
 
+class CaptureError(SeeressError):
+    """The capture cannot run, or was asked to do what it must not."""
+
+
 class MiningError(SeeressError):
     """The activity record could not be mined, or a proposal is not in a state a command
     needs."""

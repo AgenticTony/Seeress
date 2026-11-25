@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from seeress import activity, capture
+from seeress import activity, bodies, capture
+from seeress.errors import CaptureError
 
 from .cdp import Browser, until
 from .conftest import client_body
@@ -532,6 +533,67 @@ def test_an_event_that_cannot_be_written_ends_the_capture_and_keeps_the_error(
 
     assert isinstance(recorder.error, OSError)
     assert recorder.running is False
+
+
+# ---------------------------------------------------------------- the marker ---
+
+
+def test_a_browser_that_carries_the_marker_is_attached_to_nothing_and_the_capture_ends(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """The plan's test. The marker is planted as the product plants it: with the browser
+    tool, through bodies.ensure, on the browser Seeress started for the client door."""
+    own, address = browser
+    bodies.ensure("client", headless=True)
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        until(lambda: recording.recorder.error, "the capture to end", 10)
+
+        error = recording.recorder.error
+        assert isinstance(error, CaptureError)
+        assert "This browser is Seeress's own: it carries the marker." in str(error)
+        tab.wait_loaded()
+        tab.click('[data-testid="save"]')
+        tab.type_text(TYPED, 'input[name="query"]')
+        waited_a_moment()
+        assert recording.events() == []
+        assert recording.recorder.running is False
+    finally:
+        tab.close()
+        recording.stop()
+
+
+def test_the_capture_takes_no_notice_of_any_cookie_but_the_marker(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """A cookie of another name, for another site, is nobody's business. It is not in the
+    way of the capture, and nothing of it is written."""
+    own, address = browser
+    tab = own.tab(f"{site}/")
+    tab.wait_loaded()
+    tab.call(
+        "Network.setCookie",
+        {"name": "a-personal-cookie", "value": "something-of-the-person", "url": f"{site}/"},
+    )
+    tab.close()
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+
+        def a_click() -> list[activity.Event]:
+            tab.click('[data-testid="save"]')
+            return recording.of_kind("click")
+
+        until(a_click, "a click", 10)
+        waited_a_moment()
+
+        assert recording.recorder.error is None
+        assert "a-personal-cookie" not in recording.written()
+        assert "something-of-the-person" not in recording.written()
+    finally:
+        tab.close()
+        recording.stop()
 
 
 # ---------------------------------------------------- what is kept of nothing ---

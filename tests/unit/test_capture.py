@@ -9,11 +9,13 @@ starts.
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from seeress import activity, capture
+from seeress.errors import CaptureError
 
 TS = "2026-11-20T09:15:05"
 WHEN = activity.epoch(TS)
@@ -233,7 +235,12 @@ DEFAULT = "AC94CB6B4ADE5E53B64778803D358969"
 OTHER = "A1B75576658455A5D62CDAF2618221CA"  # a context made as a private window's is
 
 # What the capture asks to begin with, in order.
-OPENING = ["Target.setDiscoverTargets", "Target.getBrowserContexts", "Target.getTargets"]
+OPENING = [
+    "Target.setDiscoverTargets",
+    "Target.getBrowserContexts",
+    "Target.getTargets",
+    "Storage.getCookies",
+]
 
 # A browser names a frame by thirty-two characters too.
 FRAME = "6764B342A115E57CB0DA39C83A95618A"
@@ -311,6 +318,11 @@ def targets(*open: dict[str, Any]) -> dict[str, Any]:
     return {"targetInfos": list(open)}
 
 
+def cookies(*names: str) -> dict[str, Any]:
+    """The answer to the fourth command: which cookies the browser holds, by name."""
+    return {"cookies": [{"name": name, "value": "x", "domain": "d"} for name in names]}
+
+
 def created(about: dict[str, Any]) -> dict[str, Any]:
     return {"method": "Target.targetCreated", "params": {"targetInfo": about}}
 
@@ -353,6 +365,7 @@ class Held:
         self.sent = self.sessions.opens()
         self.hears(answer(2, contexts(default)))
         self.hears(answer(3, targets(*open)))
+        self.hears(answer(4, cookies()))  # and it carries no marker
 
     def hears(self, message: object) -> list[dict[str, Any]]:
         commands = self.sessions.hears(message, WHEN)
@@ -385,15 +398,15 @@ class Held:
         return [command["method"] for command in self.sent]
 
 
-def test_the_capture_asks_the_browser_three_things_to_begin_with() -> None:
-    """To tell of every target from now on, which context is its default one, and which
-    targets are open now. A browser tells of the tabs already open only when asked."""
+def test_the_capture_asks_the_browser_four_things_to_begin_with() -> None:
+    """To tell of every target from now on, which context is its default one, which targets
+    are open now, and which cookies it holds. A browser tells of the tabs already open only
+    when asked, and a cookie says whether it is Seeress's own."""
     held = Held()
 
     assert [command["method"] for command in held.sent] == OPENING
     assert held.sent[0]["params"] == {"discover": True}
-    assert held.sent[1]["params"] == {}
-    assert held.sent[2]["params"] == {}
+    assert all(command["params"] == {} for command in held.sent[1:])
 
 
 def test_the_tabs_already_open_are_attached() -> None:
@@ -401,28 +414,86 @@ def test_the_tabs_already_open_are_attached() -> None:
 
     assert held.methods() == [*OPENING, "Target.attachToTarget", "Target.attachToTarget"]
     assert held.sessions.listened == frozenset()
-    held.hears(answer(4, {"sessionId": "S1"}))
-    held.hears(answer(5, {"sessionId": "S2"}))
+    (first, second) = [c for c in held.sent if c["method"] == "Target.attachToTarget"]
+    held.hears(answer(first["id"], {"sessionId": "S1"}))
+    held.hears(answer(second["id"], {"sessionId": "S2"}))
     assert held.sessions.listened == frozenset({T1, T2})
 
 
-def test_a_tab_told_of_before_the_browser_said_which_context_is_its_default_is_held() -> None:
-    """A new tab may be told of before the answer comes. It is held, and attached when the
-    browser has said which context is its own."""
-    held = Held()
-    held.sent.clear()
-    held.hears(answer(2, contexts()))  # nothing is held yet, so nothing is attached
-    assert held.sent == []
-
+def test_a_tab_is_held_until_the_browser_has_named_its_default_context_and_shown_no_marker() -> (
+    None
+):
+    """A new tab may be told of before the answers come. It is held, and attached once both
+    have come, whichever comes second: which context is the browser's own, and that it
+    carries no marker."""
     sessions = capture.Sessions(lambda event: None)
-    (first, _, _) = (command["id"] for command in sessions.opens())
+    contexts_id, _, _, cookies_id = (command["id"] for command in sessions.opens())
 
-    assert sessions.hears(created(info()), WHEN) == []  # not yet: its context is unknown
-    (attach,) = sessions.hears(answer(first + 1, contexts()), WHEN)
+    assert sessions.hears(created(info()), WHEN) == []  # nothing is known of either
+    assert sessions.hears(answer(cookies_id, cookies()), WHEN) == []  # its context is unknown
+    (attach,) = sessions.hears(answer(contexts_id, contexts()), WHEN)  # and now both are
 
     assert attach["method"] == "Target.attachToTarget"
     assert sessions.listened == frozenset()
-    assert sessions.hears(answer(first + 1, contexts()), WHEN) == []  # and only once
+    assert sessions.hears(answer(contexts_id, contexts()), WHEN) == []  # each is asked of once
+    assert sessions.hears(answer(cookies_id, cookies()), WHEN) == []
+
+
+def test_a_tab_told_of_after_both_answers_is_attached_at_once() -> None:
+    held = Held()
+
+    (attach,) = held.hears(created(info()))
+
+    assert attach["method"] == "Target.attachToTarget"
+
+
+def test_the_marker_the_capture_looks_for_is_the_one_seeress_sets() -> None:
+    from seeress import bodies
+
+    assert capture.MARKER == "seeress_body"
+    assert capture.MARKER == bodies.MARKER_KEY
+
+
+def test_a_browser_that_carries_the_marker_is_attached_to_nothing_and_the_capture_ends() -> None:
+    """The plan's test. Seeress's marker is a cookie, and a cookie is the whole browser's:
+    nothing in such a browser is a person's work."""
+    sessions = capture.Sessions(lambda event: None)
+    contexts_id, targets_id, _, cookies_id = (command["id"] for command in sessions.opens())
+    sent: list[dict[str, Any]] = []
+    sent += sessions.hears(answer(contexts_id, contexts()), WHEN)
+    sent += sessions.hears(answer(targets_id, targets(info(), info(T2))), WHEN)
+    sent += sessions.hears(created(info("ABCDEFABCDEFABCDEFABCDEFABCDEFAB")), WHEN)
+
+    assert sent == []  # three tabs are held, and nothing is attached while the marker is unknown
+    with pytest.raises(CaptureError, match="This browser is Seeress's own") as caught:
+        sessions.hears(answer(cookies_id, cookies("other", capture.MARKER)), WHEN)
+
+    assert "Nothing in it is captured." in str(caught.value)
+    assert sessions.listened == frozenset()
+    assert sessions.hears(created(info(T2, url="https://two.example/b")), WHEN) == []
+    assert sessions.hears(answer(contexts_id, contexts()), WHEN) == []
+
+
+def test_a_browser_whose_cookies_cannot_be_read_is_attached_to_nothing() -> None:
+    """A check that could not be made is no check. Nothing is captured in a browser that
+    could not be asked whether it is Seeress's own."""
+    sessions = capture.Sessions(lambda event: None)
+    contexts_id, _, _, cookies_id = (command["id"] for command in sessions.opens())
+    sessions.hears(answer(contexts_id, contexts()), WHEN)
+    sessions.hears(created(info()), WHEN)
+
+    with pytest.raises(CaptureError, match="could not be asked"):
+        sessions.hears(refused(cookies_id), WHEN)
+
+    assert sessions.hears(created(info(T2)), WHEN) == []
+
+
+def test_an_answer_about_the_cookies_that_cannot_be_read_is_no_check() -> None:
+    sessions = capture.Sessions(lambda event: None)
+    _, _, _, cookies_id = (command["id"] for command in sessions.opens())
+
+    with pytest.raises(CaptureError, match="could not be read"):
+        sessions.hears(answer(cookies_id, {"cookies": "none"}), WHEN)
 
 
 def test_a_page_of_the_default_context_is_attached_and_listened_to() -> None:
@@ -701,6 +772,7 @@ def test_a_message_that_says_nothing_the_capture_uses_is_ignored() -> None:
         answer(99),
         {"id": "not a number"},
         answer(2, contexts(OTHER)),  # the default context is asked of once, at the start
+        answer(4, cookies(capture.MARKER)),  # and so is the marker
     )
 
     for message in messages:
@@ -722,3 +794,137 @@ def test_a_recorder_stops_before_it_ever_started() -> None:
 
     assert recorder.running is False
     assert recorder.error is None
+
+
+# --------------------------------------------------------------------- the gate ---
+
+
+def clicks(
+    count: int, *, tab: str = T1[:8], first: str = "2026-11-20T09:15:00"
+) -> list[activity.Event]:
+    """count clicks in one tab, fifty a second from first: a thousand in twenty seconds.
+    Friday 20 November 2026, a working day, inside the default schedule."""
+    start = activity.epoch(first)
+    return [
+        activity.Event(
+            1,
+            activity.clock(start + number // 50),
+            "click",
+            "example.org",
+            "/",
+            tab,
+            activity.Action("click", "button", "b", None),
+        )
+        for number in range(count)
+    ]
+
+
+def passed(gate: capture.Gate, events: list[activity.Event]) -> None:
+    for event in events:
+        gate(event)
+
+
+def test_a_minute_of_a_thousand_events_in_one_tab_writes_two_hundred(tmp_path: Path) -> None:
+    gate = capture.Gate(tmp_path)
+
+    passed(gate, clicks(1000))
+
+    assert len(activity.read_events(tmp_path)) == 200
+    assert gate.written == 200
+    assert gate.dropped == {"schedule": 0, "cap": 800}
+
+
+def test_a_thousand_events_in_each_of_two_tabs_write_two_hundred_each(tmp_path: Path) -> None:
+    """The cap is for one tab. What floods one tab takes nothing from another."""
+    gate = capture.Gate(tmp_path)
+
+    passed(gate, clicks(1000))
+    passed(gate, clicks(1000, tab=T2[:8]))
+
+    assert len(activity.read_events(tmp_path)) == 400
+    assert gate.dropped == {"schedule": 0, "cap": 1600}
+
+
+def test_an_event_after_a_quiet_minute_opens_a_new_window(tmp_path: Path) -> None:
+    """The first event of a tab after a quiet minute opens the window again."""
+    gate = capture.Gate(tmp_path)
+
+    passed(gate, clicks(200))  # 09:15:00 to 09:15:03: the two hundred of a window
+    passed(gate, clicks(1, first="2026-11-20T09:15:30"))  # the 201st of that window
+    passed(gate, clicks(1, first="2026-11-20T09:16:00"))  # sixty seconds after it opened
+    passed(gate, clicks(1, first="2026-11-20T09:16:59"))  # in the second window
+    passed(gate, clicks(1, first="2026-11-20T09:17:00"))  # sixty seconds on: a third
+
+    assert gate.written == 203
+    assert gate.dropped == {"schedule": 0, "cap": 1}
+    assert [event.ts for event in activity.read_events(tmp_path)][-3:] == [
+        "2026-11-20T09:16:00",
+        "2026-11-20T09:16:59",
+        "2026-11-20T09:17:00",
+    ]
+
+
+def test_the_cap_is_two_hundred_events_in_sixty_seconds() -> None:
+    assert capture.CAP == 200
+    assert capture.WINDOW == 60
+
+
+def test_an_event_outside_the_schedule_is_dropped_and_one_inside_is_written(
+    tmp_path: Path,
+) -> None:
+    gate = capture.Gate(tmp_path)
+
+    passed(gate, clicks(1, first="2026-11-20T07:59:59"))  # Friday, before eight
+    passed(gate, clicks(1, first="2026-11-20T08:00:00"))
+    passed(gate, clicks(1, first="2026-11-20T17:59:59"))
+    passed(gate, clicks(1, first="2026-11-20T18:00:00"))  # after six
+
+    assert [event.ts for event in activity.read_events(tmp_path)] == [
+        "2026-11-20T08:00:00",
+        "2026-11-20T17:59:59",
+    ]
+    assert gate.dropped == {"schedule": 2, "cap": 0}
+
+
+def test_a_day_that_is_not_in_the_schedule_drops_every_event_of_it(tmp_path: Path) -> None:
+    gate = capture.Gate(tmp_path)
+
+    passed(gate, clicks(3, first="2026-11-21T10:00:00"))  # Saturday
+    passed(gate, clicks(3, first="2026-11-22T10:00:00"))  # Sunday
+    passed(gate, clicks(3, first="2026-11-23T10:00:00"))  # Monday
+
+    assert len(activity.read_events(tmp_path)) == 3
+    assert gate.dropped == {"schedule": 6, "cap": 0}
+
+
+def test_the_schedule_of_the_gate_is_the_one_it_is_given(tmp_path: Path) -> None:
+    gate = capture.Gate(tmp_path, schedule=activity.Schedule(frozenset({5}), 10, 11))
+
+    passed(gate, clicks(1, first="2026-11-20T10:30:00"))  # Friday: a working day by default
+    passed(gate, clicks(1, first="2026-11-21T10:30:00"))  # Saturday, ten to twelve
+
+    assert [event.ts for event in activity.read_events(tmp_path)] == ["2026-11-21T10:30:00"]
+
+
+def test_what_passes_the_gate_is_written_as_it_came_and_for_the_day_of_its_own_second(
+    tmp_path: Path,
+) -> None:
+    gate = capture.Gate(tmp_path)
+    (event,) = clicks(1, first="2026-11-20T09:15:07")
+
+    gate(event)
+
+    (written,) = activity.read_events(tmp_path)
+    assert written == event
+    assert [path.name for path in (tmp_path / "watch").iterdir()] == ["activity-20261120.jsonl"]
+
+
+def test_an_event_that_cannot_be_written_ends_the_gate_with_the_error(tmp_path: Path) -> None:
+    """The gate writes through write_event, which raises. Nothing is swallowed."""
+    (tmp_path / "watch").write_text("a file where the folder should be", encoding="utf-8")
+    gate = capture.Gate(tmp_path)
+
+    with pytest.raises(OSError):
+        gate(clicks(1)[0])
+
+    assert gate.written == 0

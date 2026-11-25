@@ -264,6 +264,13 @@ class Schedule:
 DEFAULT_SCHEDULE = Schedule(frozenset({0, 1, 2, 3, 4}), 8, 17)
 
 
+def due(when: float, schedule: Schedule = DEFAULT_SCHEDULE) -> bool:
+    """True when the second when falls in the schedule: on one of its days, and in one of
+    its hours, the first and the last included."""
+    local = time.localtime(when)
+    return local.tm_wday in schedule.days and schedule.start <= local.tm_hour <= schedule.end
+
+
 def read_events(home: Path, hours: float | None = None, *, now: float | None = None) -> list[Event]:
     """The activity events in the record under home, oldest first.
 

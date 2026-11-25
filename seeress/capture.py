@@ -11,6 +11,9 @@ The site and the path come from the browser, not from the page. The capture take
 the address the browser last gave for the tab, without the query and the fragment. So no
 page can say what site it is on.
 
+Before an event is written it passes a gate: only in the schedule, and no more than two
+hundred a minute from one tab. What is refused is counted and not written.
+
 Nothing here looks for a browser. The capture takes an address, and whose browser is behind
 it is for the caller to know. This module starts nothing on anyone's browser.
 """
@@ -22,6 +25,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypeGuard
 from urllib.parse import urlsplit
 
@@ -29,7 +33,13 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import WebSocketException
 
 from . import activity
-from .activity import Event
+from .activity import DEFAULT_SCHEDULE, Event, Schedule, due, epoch, write_event
+from .errors import CaptureError
+
+# The cookie by which Seeress knows a browser for its own. A browser that carries it is one
+# Seeress started for a door, and nothing in it is a person's work. The name is
+# `MARKER_KEY` in seeress/bodies.py, and a test holds the two together.
+MARKER = "seeress_body"
 
 # What the listener reports through, and the world of the page it runs in. A world of its own
 # keeps the binding and the listener out of the reach of the page's own scripts: a page can
@@ -233,10 +243,13 @@ class Sessions:
     commands the capture sent. hears takes one message and returns the commands to send back.
     The connection is not here, so all of this can be tried without a browser.
 
-    Three things are asked to begin with, and each answer changes what is done with a tab:
+    Four things are asked to begin with, and each answer changes what is done with a tab:
     which targets are open now, because a browser tells of the tabs already open only when
-    asked; and which context is its default one, because it names a context on every tab,
-    the default one included. Until it has answered that, a tab is held and not attached.
+    asked; which context is its default one, because it names a context on every tab, the
+    default one included; and which cookies it holds, for the marker that says the browser is
+    Seeress's own. Until the browser has named its default context and shown no marker, a tab
+    is held and not attached. A marker ends the capture with CaptureError, and a check that
+    could not be made ends it the same way.
 
     A tab that is attached gets the binding, for the world of the capture alone, and is asked
     for its main frame. The listener is put into the world of that frame, and put in again
@@ -254,6 +267,8 @@ class Sessions:
         self._last_id = 0
         self._default_context: object = None  # the context the browser names as its own
         self._context_known = False  # once the browser has answered the second command
+        self._no_marker = False  # once the browser has shown that it carries none
+        self._cookies_command = 0  # the id of the command that asks for the cookies
 
     @property
     def listened(self) -> frozenset[str]:
@@ -262,12 +277,16 @@ class Sessions:
 
     def opens(self) -> list[dict[str, Any]]:
         """The first commands, in this order: the browser is asked to tell of every target
-        from now on, which context is its default one, and which targets are open now."""
-        return [
+        from now on, which context is its default one, which targets are open now, and which
+        cookies it holds."""
+        opening = [
             self._command("Target.setDiscoverTargets", {"discover": True}),
             self._command("Target.getBrowserContexts", {}),
             self._command("Target.getTargets", {}),
         ]
+        cookies = self._command("Storage.getCookies", {})
+        self._cookies_command = cookies["id"]
+        return [*opening, cookies]
 
     def hears(self, message: object, when: float) -> list[dict[str, Any]]:
         """One message from the browser, and the commands to send back for it."""
@@ -312,15 +331,23 @@ class Sessions:
         return self._attach(info["targetId"])
 
     def _attach(self, target: str) -> list[dict[str, Any]]:
-        """Attach a held tab, if it is of the default context, and is not attached or being
-        attached."""
+        """Attach a held tab, if the browser has been shown to be a person's and not
+        Seeress's own, if the tab is of its default context, and if it is not attached or
+        being attached."""
         tab = self._tabs[target]
-        if not self._is_own(tab.context) or tab.session is not None or tab.attaching:
+        if not self._ready() or not self._is_own(tab.context):
+            return []
+        if tab.session is not None or tab.attaching:
             return []
         tab.attaching = True
         command = self._command("Target.attachToTarget", {"targetId": target, "flatten": True})
         self._pending[command["id"]] = ("attach", target)
         return [command]
+
+    def _ready(self) -> bool:
+        """True when nothing more is needed before a tab may be attached: the browser has
+        named its default context, and has shown that it carries no marker."""
+        return self._context_known and self._no_marker
 
     def _is_own(self, context: object) -> bool:
         """True for the context the browser names as its default one. A browser that names
@@ -337,6 +364,8 @@ class Sessions:
             return self._context_named(result)
         if "targetInfos" in result:
             return [command for info in result["targetInfos"] for command in self._told_of(info)]
+        if "cookies" in result:
+            return self._cookies_named(result)
         waiting = self._pending.pop(identifier, None)
         if waiting is None:
             return []
@@ -354,7 +383,36 @@ class Sessions:
         waiting = self._pending.pop(identifier, None)
         if waiting is not None and waiting[0] == "attach":
             self._tabs.pop(waiting[1], None)
+            return []
+        if identifier == self._cookies_command:
+            # A check that could not be made is no check: nothing is captured here.
+            self._tabs.clear()
+            raise CaptureError(
+                "The browser could not be asked whether it is Seeress's own, so nothing in it"
+                " is captured."
+            )
         return []
+
+    def _cookies_named(self, result: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """The browser has said which cookies it holds. A cookie with the marker's name says
+        that it is Seeress's own: nothing in it is attached, and the capture ends. Otherwise
+        the tabs held until now may be attached. The names are looked at and nothing is kept."""
+        if self._no_marker:
+            return []  # it is asked of once, at the start
+        held = result.get("cookies", [])
+        if not isinstance(held, list):
+            self._tabs.clear()
+            raise CaptureError(
+                "The browser's answer about its cookies could not be read, so nothing in it is"
+                " captured."
+            )
+        if any(isinstance(cookie, Mapping) and cookie.get("name") == MARKER for cookie in held):
+            self._tabs.clear()
+            raise CaptureError(
+                "This browser is Seeress's own: it carries the marker. Nothing in it is captured."
+            )
+        self._no_marker = True
+        return [command for target in list(self._tabs) for command in self._attach(target)]
 
     def _attached(self, target: str, result: Mapping[str, Any]) -> list[dict[str, Any]]:
         """A tab is attached. Its listener needs the binding, which is for its world alone,
@@ -468,6 +526,50 @@ class Sessions:
             self._emit(event)
 
 
+# ------------------------------------------------------------------------- the gate ---
+
+
+# No tab may put more than this many events in the record in one window of seconds. A page
+# that fires a thousand clicks a minute is not a person at work, and a person reads no more.
+CAP = 200
+WINDOW = 60.0
+
+
+class Gate:
+    """Between the browser and the record. What passes is written; what is refused is counted
+    and not written.
+
+    An event passes in this order, and the first rule that refuses it wins: the schedule,
+    then the cap for its tab. The address of the tab has been judged before, when the event
+    was made. What passes is written with write_event, for the user alone.
+    """
+
+    def __init__(self, home: Path, *, schedule: Schedule = DEFAULT_SCHEDULE) -> None:
+        self._home = home
+        self._schedule = schedule
+        # A tab: when its window opened, and how many of its events passed in it.
+        self._windows: dict[str, tuple[float, int]] = {}
+        self.written = 0
+        self.dropped = {"schedule": 0, "cap": 0}
+
+    def __call__(self, event: Event) -> None:
+        """One event from a tab. Written, or counted among the dropped."""
+        when = epoch(event.ts)
+        if not due(when, self._schedule):
+            self.dropped["schedule"] += 1
+            return
+        tab = event.target or ""
+        opened, passed = self._windows.get(tab, (when, 0))
+        if when - opened >= WINDOW:  # the first event of a tab after a quiet minute
+            opened, passed = when, 0
+        self._windows[tab] = (opened, passed + 1)
+        if passed >= CAP:
+            self.dropped["cap"] += 1
+            return
+        write_event(self._home, event, now=when)
+        self.written += 1
+
+
 # ----------------------------------------------------------------- the connection ---
 
 
@@ -558,7 +660,8 @@ class Recorder:
         self._ready.set()
         try:
             loop.run_until_complete(watch(self._address, self._emit, stop=self._stop))
-        except (OSError, WebSocketException) as error:  # the browser could not be reached
+        except (OSError, WebSocketException, CaptureError) as error:
+            # The browser could not be reached, or it is Seeress's own, or it could not say.
             self._error = error
         finally:
             loop.close()
