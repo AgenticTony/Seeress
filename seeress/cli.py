@@ -7,11 +7,15 @@ COMMANDS_HELP is what `seeress --help` prints: every command, and how the door i
 """
 
 import argparse
+import contextlib
 import logging
 import os
+import signal
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
+from types import FrameType
+from typing import Any
 
 from . import bodies, config, flows, mine, watcher
 from .agent import DEFAULT_MAX_STEPS, chat_session, run_task
@@ -236,15 +240,62 @@ def _logging() -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run one command. Returns the exit status."""
+    """Run one command. Returns the exit status.
+
+    A signal that asks the process to end is turned into an ordinary exit, so that whatever
+    is in hand is closed and noted before the process goes, as when an error ends it. Until
+    2026-11-25 closing the terminal ended the process with no note of a run of the agent,
+    and its minutes were taken for the person's.
+    """
     args = list(sys.argv[1:] if argv is None else argv) or ["chat"]
     command, rest = _split(args)
     _logging()
+    with _ending_cleanly():
+        try:
+            return _task(rest) if command is None else COMMANDS[command](rest)
+        except SeeressError as exc:
+            print(f"seeress error: {exc}", file=sys.stderr)
+            return 1
+        except Stopped:
+            print("seeress: stopped. Whatever was in hand is noted as ended.", file=sys.stderr)
+            return 1
+
+
+# The signals by which a process is asked to end. Closing a terminal sends the second.
+ENDING_SIGNALS = tuple(
+    number
+    for number in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None))
+    if number is not None
+)
+
+Handler = int | Callable[[int, FrameType | None], Any] | None
+
+
+class Stopped(BaseException):
+    """A signal asked the process to end. It is raised where the program is, so that
+    whatever is in hand is closed and noted. It is not an Exception: nothing catches it by
+    accident on the way up."""
+
+
+def _stopped(signum: int, frame: FrameType | None) -> None:
+    raise Stopped(signum)
+
+
+@contextlib.contextmanager
+def _ending_cleanly() -> Iterator[None]:
+    """While it holds, a signal that asks the process to end raises Stopped where the
+    program is. The handlers there were before are put back after."""
+    before: dict[int, Handler] = {}
     try:
-        return _task(rest) if command is None else COMMANDS[command](rest)
-    except SeeressError as exc:
-        print(f"seeress error: {exc}", file=sys.stderr)
-        return 1
+        for number in ENDING_SIGNALS:
+            before[number] = signal.signal(number, _stopped)
+    except ValueError:  # not the main thread, where signals cannot be caught
+        pass
+    try:
+        yield
+    finally:
+        for number, handler in before.items():
+            signal.signal(number, handler)
 
 
 if __name__ == "__main__":

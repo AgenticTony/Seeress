@@ -76,6 +76,13 @@ TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
 PRIVATE = 0o700
 PRIVATE_FILE = 0o600
 
+# How long after a run of the agent ended the logger may still write a page the agent
+# opened. The spike logger asks the browser which page is in front once every five seconds,
+# and writes what it sees at the time it sees it. So a run reaches this far past its end,
+# and what was written inside it is not taken for the person's. A contract test holds this
+# to the logger's own interval.
+POLL_LAG = 5
+
 
 def _matches(shape: re.Pattern[str], value: object) -> bool:
     """True when value is a string that holds the shape where the schema looks for it."""
@@ -306,9 +313,12 @@ def read_agent_runs(
 
     The runs are in agent-runs.jsonl, one object per line. Its start is the ts of when a
     run began and its end the ts of when it ended. A missing file is no run. A line whose
-    start and end cannot be read, or whose end is before its start, is skipped. With hours,
-    a run that ended before the cutoff is left out. The cutoff is now, or the clock, less
-    the hours. Nothing is written.
+    start and end cannot be read, or whose end is before its start, is skipped.
+
+    Each run reaches POLL_LAG seconds past its end. The spike logger asks the browser which
+    page is in front only once every few seconds, so a page the agent opened can be written
+    after the note of the run's end. With hours, a run that ended before the cutoff is left
+    out. The cutoff is now, or the clock, less the hours. Nothing is written.
     """
     cutoff = _cutoff(hours, now)
     try:
@@ -322,7 +332,7 @@ def read_agent_runs(
             continue
         start, end = _when(data.get("start")), _when(data.get("end"))
         if start is not None and end is not None and start <= end:
-            runs.append(Interval(start, end))
+            runs.append(Interval(start, end + POLL_LAG))
     return [run for run in runs if cutoff is None or run.end >= cutoff]
 
 

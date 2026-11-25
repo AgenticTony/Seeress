@@ -1,6 +1,8 @@
 """The command line: thin, and it turns a SeeressError into a reason and exit status 1."""
 
 import logging
+import signal
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -437,3 +439,37 @@ def test_the_default_door_is_personal_and_there_are_two() -> None:
 @pytest.mark.parametrize("launcher", ["bin/seeress-personal", "bin/seeress-client"])
 def test_each_door_has_a_launcher_script(launcher: str) -> None:
     assert (Path(__file__).resolve().parents[2] / launcher).is_file()
+
+
+def test_a_signal_to_end_the_process_ends_it_cleanly(
+    patch: Patcher, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run in hand is closed and noted, as when an error ends it. Closing the terminal
+    sends such a signal, and before this it ended the process without a note."""
+    history: list[tuple[int, int | Callable[..., object]]] = []
+    undone: list[str] = []
+
+    def fake_set(signum: int, handler: int | Callable[..., object]) -> int | Callable[..., object]:
+        history.append((signum, handler))
+        return signal.SIG_DFL
+
+    def in_hand(argv: Sequence[str]) -> int:
+        try:
+            installed = dict(history)[signal.SIGTERM]
+            assert callable(installed)
+            installed(signal.SIGTERM, None)
+        finally:
+            undone.append("closed")
+        return 0
+
+    patch(signal, "signal", fake_set)
+    patch(cli, "COMMANDS", {"in-hand": in_hand})
+
+    assert cli.main(["in-hand"]) == 1
+
+    assert undone == ["closed"]
+    assert "stopped" in capsys.readouterr().err
+    assert history[-2:] == [
+        (signal.SIGTERM, signal.SIG_DFL),
+        (signal.SIGHUP, signal.SIG_DFL),
+    ]

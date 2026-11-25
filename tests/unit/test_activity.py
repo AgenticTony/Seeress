@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from seeress import activity
+from seeress import activity, watcher
 
 TS = "2026-11-20T09:15:05"
 FILE = "spike-20261120.jsonl"
@@ -674,6 +674,12 @@ def test_no_record_is_no_outage(tmp_path: Path) -> None:
 RUNS = "agent-runs.jsonl"
 
 
+def a_run(start: str, end: str) -> activity.Interval:
+    """The run a note of these two moments reads back as: it reaches past its end by the
+    time the logger may be late."""
+    return activity.Interval(activity.epoch(start), activity.epoch(end) + activity.POLL_LAG)
+
+
 def test_no_file_of_agent_runs_is_no_run(tmp_path: Path) -> None:
     assert activity.read_agent_runs(tmp_path) == []
 
@@ -694,8 +700,8 @@ def test_each_line_that_reads_is_a_run_in_the_order_written(tmp_path: Path) -> N
     found = activity.read_agent_runs(tmp_path)
 
     assert found == [
-        between("2026-11-20T09:00:00", "2026-11-20T09:10:00"),
-        between("2026-11-20T08:20:00", "2026-11-20T08:25:00"),
+        a_run("2026-11-20T09:00:00", "2026-11-20T09:10:00"),
+        a_run("2026-11-20T08:20:00", "2026-11-20T08:25:00"),
     ]
 
 
@@ -724,14 +730,14 @@ def test_a_line_of_the_runs_that_does_not_read_is_skipped(tmp_path: Path, line: 
 
     found = activity.read_agent_runs(tmp_path)
 
-    assert found == [between("2026-11-20T10:00:00", "2026-11-20T10:05:00")]
+    assert found == [a_run("2026-11-20T10:00:00", "2026-11-20T10:05:00")]
 
 
 def test_a_run_that_begins_and_ends_in_one_second_is_a_run(tmp_path: Path) -> None:
     write(tmp_path, RUNS, agent_run("2026-11-20T10:00:00", "2026-11-20T10:00:00"))
 
     assert activity.read_agent_runs(tmp_path) == [
-        between("2026-11-20T10:00:00", "2026-11-20T10:00:00")
+        a_run("2026-11-20T10:00:00", "2026-11-20T10:00:00")
     ]
 
 
@@ -745,7 +751,7 @@ def test_under_hours_a_run_that_ended_before_the_cutoff_is_left_out(tmp_path: Pa
 
     found = activity.read_agent_runs(tmp_path, hours=1)
 
-    assert found == [between(ago(20 * 60), ago(10 * 60))]
+    assert found == [a_run(ago(20 * 60), ago(10 * 60))]
 
 
 def test_the_readers_of_outages_and_runs_write_nothing(tmp_path: Path) -> None:
@@ -784,7 +790,7 @@ def test_a_run_of_the_agent_is_noted_as_one_line_that_reads_back(tmp_path: Path)
         "name": "check-invoices",
     }
     assert activity.read_agent_runs(tmp_path) == [
-        between("2026-11-20T09:00:00", "2026-11-20T09:05:00")
+        a_run("2026-11-20T09:00:00", "2026-11-20T09:05:00")
     ]
 
 
@@ -1035,3 +1041,29 @@ def test_only_the_logger_s_own_files_say_when_it_could_not_reach_the_browser(
     assert activity.read_outages(tmp_path) == [
         between("2026-11-20T09:15:00", "2026-11-20T09:15:05")
     ]
+
+
+def test_a_run_reaches_past_its_end_by_the_logger_s_poll(tmp_path: Path) -> None:
+    """The logger writes the page in front once every five seconds, so a page the agent
+    opened can be written after the run was noted as ended."""
+    write(tmp_path, RUNS, agent_run("2026-11-20T09:00:00", "2026-11-20T09:05:00"))
+
+    (run,) = activity.read_agent_runs(tmp_path)
+
+    assert run.end - run.start == 300 + activity.POLL_LAG
+
+
+def test_the_poll_of_the_logger_is_the_one_the_reader_allows_for() -> None:
+    assert int(watcher.POLL_FOCUS_S) == activity.POLL_LAG
+
+
+def test_under_hours_a_run_that_straddles_the_cutoff_is_kept(tmp_path: Path) -> None:
+    write(tmp_path, RUNS, agent_run(ago(90 * 60), ago(30 * 60)))
+
+    assert activity.read_agent_runs(tmp_path, hours=1) == [a_run(ago(90 * 60), ago(30 * 60))]
+
+
+def test_under_hours_an_outage_that_straddles_the_cutoff_is_kept(tmp_path: Path) -> None:
+    write(tmp_path, FILE, down(ago(90 * 60)), connected(ago(30 * 60)))
+
+    assert activity.read_outages(tmp_path, hours=1) == [between(ago(90 * 60), ago(30 * 60))]

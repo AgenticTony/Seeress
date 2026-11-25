@@ -294,3 +294,24 @@ def test_when_the_note_cannot_be_written_the_runs_own_result_stands(
     result = runner.run_browser_command("print(1)", profile="client", timeout=5, ws=ADDRESS)
 
     assert result.stdout == "the answer"
+
+
+def test_a_run_is_noted_from_the_moment_before_it_to_the_moment_after_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """By a clock of the test's. The start and the end of the note are these two moments,
+    and not the same second by luck."""
+    use(monkeypatch, Proc(0, "the answer"))
+    moments = iter([activity.epoch("2026-11-20T09:00:00"), activity.epoch("2026-11-20T09:00:07")])
+
+    class Clock:
+        @staticmethod
+        def time() -> float:
+            return next(moments)
+
+    monkeypatch.setattr(runner, "time", Clock)
+
+    runner.run_browser_command("print(1)", profile="client", timeout=5, ws=ADDRESS)
+
+    (run,) = noted()
+    assert (run["start"], run["end"]) == ("2026-11-20T09:00:00", "2026-11-20T09:00:07")
