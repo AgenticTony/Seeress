@@ -1137,6 +1137,83 @@ def test_a_long_address_or_a_long_tag_makes_no_line_over_its_bound(
     assert all(len(event.path) <= 2048 for event in recording.events())
 
 
+def test_a_zero_in_a_name_is_replaced_as_every_digit_is(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """The digits of a name are replaced, and not only those from one to nine: an identifier
+    with a zero in it is another one on every visit, as any other is."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        tab.run(
+            "(() => { const b = document.createElement('button'); b.id = 'row';"
+            " b.setAttribute('data-testid', 'row-2048'); b.textContent = 'row';"
+            " document.body.appendChild(b); })()"
+        )
+        tab.click("#row")
+        heard = until(
+            lambda: recording.of_kind("click") or recording.recorder.error,
+            "a click on the element so named",
+            10,
+        )
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert recording.recorder.error is None, repr(recording.recorder.error)
+    assert len(heard) == 1
+    assert heard[0].action is not None
+    assert heard[0].action.fingerprint == 'button[data-testid="row-####"]'
+
+
+def test_an_image_s_description_and_a_field_s_hint_name_no_element(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """An image's alt text says what the image is, and a field's placeholder says what to
+    type there. Both are prose, often about a person, and neither names an element: with no
+    attribute that does, each is told apart by its place. Their ids have a digit in them,
+    and an id with a digit in it is no name."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        tab.run(
+            "(() => {"
+            " const img = document.createElement('img'); img.id = 'picture-1';"
+            " img.alt = 'A photo of a person'; img.src = '/pixel.png';"
+            " img.style = 'width: 40px; height: 40px; display: block';"
+            " document.body.appendChild(img);"
+            " const field = document.createElement('input'); field.id = 'hinted-1';"
+            " field.placeholder = 'Write to a person'; document.body.appendChild(field);"
+            " })()"
+        )
+        tab.click("#picture-1")
+        tab.type_text(TYPED, "#hinted-1")
+        until(
+            lambda: recording.kinds() == ["click", "input"] or recording.recorder.error,
+            "a click and an input",
+            10,
+        )
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert recording.recorder.error is None, repr(recording.recorder.error)
+    placed, typed = recording.events()
+    assert placed.action is not None and typed.action is not None
+    assert placed.action.fingerprint.startswith(
+        "html:nth-child(1)>body:nth-child(2)>img:nth-child("
+    )
+    assert typed.action.fingerprint.startswith(
+        "html:nth-child(1)>body:nth-child(2)>input:nth-child("
+    )
+    assert "photo" not in recording.written()
+    assert "Write" not in recording.written()
+
+
 def test_prose_is_no_name_for_an_element(
     home: Path, browser: tuple[Browser, str], site: str
 ) -> None:
