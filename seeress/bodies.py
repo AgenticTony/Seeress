@@ -616,7 +616,8 @@ def close_over_cdp(address: str) -> bool:
 
     failed = (WebSocketException, OSError, TimeoutError, ValueError)
     try:
-        with connect(address, open_timeout=3, close_timeout=1, max_size=None) as socket:
+        # No proxy: a named one would stand between Seeress and its own browser.
+        with connect(address, open_timeout=3, close_timeout=1, max_size=None, proxy=None) as socket:
             socket.send(json.dumps({"id": 1, "method": "Browser.close"}))
             with contextlib.suppress(*failed):  # it may close before it answers
                 socket.recv(timeout=3)

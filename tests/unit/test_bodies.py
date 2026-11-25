@@ -760,3 +760,36 @@ def test_a_caller_may_name_the_sites_itself(starter: Launch) -> None:
     bodies.launch(client_body().profile_dir, headless=True, allowed_hosts=("iana.org",))
 
     assert "--proxy-bypass-list=iana.org;*.iana.org" in starter.started.arguments
+
+
+def test_the_connection_that_closes_the_browser_has_no_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The browser is asked to close over a loopback address, and a proxy must never stand
+    between: the library's default would send even a loopback address to a proxy that is
+    named."""
+    from websockets.sync import client
+
+    asked: dict[str, object] = {}
+
+    class Standing:
+        def __init__(self, address: str, **options: object) -> None:
+            asked.update(options)
+
+        def __enter__(self) -> "Standing":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def send(self, message: str) -> None:
+            return None
+
+        def recv(self, timeout: float | None = None) -> str:
+            return json.dumps({"id": 1, "result": {}})
+
+    monkeypatch.setattr(client, "connect", Standing)
+
+    assert bodies.close_over_cdp("ws://127.0.0.1:9/devtools/browser/one") is True
+
+    assert asked.get("proxy", "never asked") is None

@@ -89,7 +89,11 @@ async def _ws_loop(log: Log):
     while True:
         try:
             port, path = _read_port()
-            async with websockets.connect(f"ws://127.0.0.1:{port}{path}", max_size=2**22) as ws:
+            # No proxy: every tab's address and title pass this way, and a proxy that is
+            # named would see them, even for a loopback address.
+            async with websockets.connect(
+                f"ws://127.0.0.1:{port}{path}", max_size=2**22, proxy=None
+            ) as ws:
                 await ws.send(
                     json.dumps(
                         {

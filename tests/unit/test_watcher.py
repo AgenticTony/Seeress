@@ -4,6 +4,7 @@ The logger is a spike, to be replaced. Until then these tests protect the behavi
 its measurement depends on.
 """
 
+import asyncio
 import json
 import subprocess
 import time
@@ -210,3 +211,57 @@ def test_stop_unloads_and_removes_the_agent(home: Path, monkeypatch: pytest.Monk
     assert watcher.stop() == "watcher stopped"
     assert commands == [["launchctl", "unload", str(plist)]]
     assert not plist.exists()
+
+
+def test_the_logger_s_connection_has_no_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A proxy must never see what is said to this machine: every tab's address and its
+    title pass on this connection. Tried on the library: with HTTP_PROXY named, a loopback
+    address went to the proxy by default, and not with proxy=None."""
+    import websockets
+
+    asked: dict[str, object] = {}
+
+    class Standing:
+        """A connection to nowhere: it records how it was asked for and says nothing."""
+
+        def __init__(self, address: str, **options: object) -> None:
+            asked.update(options)
+
+        async def __aenter__(self) -> "Standing":
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+        async def send(self, message: str) -> None:
+            raise RuntimeError("enough: the test asks only how the connection was asked for")
+
+    class Ended(BaseException):
+        """Ends the loop of the logger, as no error it catches would."""
+
+    reads = iter([(9222, "/devtools/browser/one")])
+
+    def read_port() -> tuple[int, str]:
+        try:
+            return next(reads)
+        except StopIteration:
+            raise Ended from None
+
+    said: list[tuple[str, dict[str, object]]] = []
+
+    class Log:
+        def ev(self, kind: str, **fields: object) -> None:
+            said.append((kind, fields))
+
+    async def no_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(websockets, "connect", Standing)
+    monkeypatch.setattr(watcher, "_read_port", read_port)
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    with pytest.raises(Ended):
+        asyncio.run(watcher._ws_loop(Log()))  # type: ignore[arg-type]
+
+    assert asked.get("proxy", "never asked") is None
+    assert asked  # the connection was made, and this is how it was asked for
