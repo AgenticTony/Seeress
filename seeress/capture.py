@@ -36,11 +36,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import Any, Protocol, TypeGuard
 from urllib.parse import urlsplit
 
 from websockets.asyncio.client import connect
 from websockets.exceptions import WebSocketException
+from websockets.typing import Data
 
 from . import activity
 from .activity import DEFAULT_SCHEDULE, Event, Schedule, due, epoch, write_event
@@ -891,6 +892,66 @@ async def _left(task: asyncio.Future[Any] | None) -> None:
 # ----------------------------------------------------------------- the connection ---
 
 
+class _Socket(Protocol):
+    """What the capture needs of its connection to the browser."""
+
+    async def send(self, message: str) -> None: ...
+
+    async def recv(self) -> Data: ...
+
+    async def close(self) -> None: ...
+
+
+class Nowhere:
+    """A connection to nowhere, for a capture stopped before the browser let it in. What
+    is sent to it is dropped. The loop reads nothing from it: it sees the stop first."""
+
+    async def send(self, message: str) -> None:
+        return None
+
+    async def recv(self) -> Data:
+        # The loop reads nothing from here: it sees the stop first. If it ever did, that
+        # would be a fault, and it is said to be one.
+        raise RuntimeError("a connection to nowhere has nothing to say")
+
+    async def close(self) -> None:
+        return None
+
+
+class Connected:
+    """The capture's connection to the browser, as a context.
+
+    Entering waits for the browser to let the capture in, or for the stop, whichever comes
+    first. Stopped first, the capture goes on with a connection to nowhere: the loop sees
+    the stop first, and the attempt is given up. It is not waited for and not an error.
+    Before, a stop asked for while the browser was being reached waited for the connection
+    to succeed or to give up, ten seconds by default, and came back as a timeout.
+    """
+
+    def __init__(self, address: str, ended: asyncio.Event) -> None:
+        # No bound on the size of one message. The capture is told whatever a page says to
+        # its console, and under a bound one large line from any page ended the connection,
+        # and the capture in every tab with it. No proxy: one must never see this machine.
+        self._connection = connect(address, max_size=None, proxy=None)
+        self._ended = ended
+        self._socket: _Socket = Nowhere()
+
+    async def __aenter__(self) -> _Socket:
+        entering = asyncio.ensure_future(self._connection.__aenter__())
+        stopping = asyncio.create_task(self._ended.wait())
+        done, _ = await asyncio.wait({entering, stopping}, return_when=asyncio.FIRST_COMPLETED)
+        await _left(stopping)
+        if entering not in done:
+            await _left(entering)
+            return self._socket
+        self._socket = entering.result()  # raises when the browser could not be reached
+        return self._socket
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self._socket.close()
+        return None
+
+
 async def watch(
     address: str,
     emit: Callable[[Event], None],
@@ -922,10 +983,7 @@ async def watch(
     keeping: asyncio.Task[None] | None = None  # once the browser has let the capture in
     answered = False
     try:
-        # No bound on the size of one message. The capture is told whatever a page says
-        # to its console, and under a bound one large line from any page ended the
-        # connection, and the capture in every tab with it.
-        async with connect(address, max_size=None, proxy=None) as socket:
+        async with Connected(address, ended) as socket:
             if keep is not None:
                 keeping = asyncio.create_task(hourly(keep, every, ended))
             for command in sessions.opens():

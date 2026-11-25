@@ -1556,6 +1556,9 @@ class Standing:
     async def recv(self) -> None:
         await asyncio.Event().wait()  # a word that never comes
 
+    async def close(self) -> None:
+        return None
+
 
 def awaited(condition: Callable[[], object], seconds: float = 10.0) -> object:
     """Wait, on the test's own thread, for condition to come back with something."""
@@ -1621,3 +1624,43 @@ def test_a_recorder_that_failed_once_shows_no_error_while_it_runs_well_after(
 
     assert recorder.error is None
     assert recorder.running is False
+
+
+class Slow:
+    """A stand-in for a browser that takes its time to let the capture in, as one that is
+    not answering does for ten seconds, and then gives up."""
+
+    def __init__(self) -> None:
+        self.gave_up = False
+
+    def __call__(self, address: str, **options: object) -> "Slow":
+        return self
+
+    async def __aenter__(self) -> "Slow":
+        await asyncio.sleep(3)
+        self.gave_up = True
+        raise TimeoutError("the browser did not let the capture in")
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+def test_a_capture_stopped_before_the_browser_let_it_in_stops_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stop asked for while the browser was being reached waited for the connection to
+    succeed or to give up, and came back as a timeout. It is neither waited for nor an
+    error."""
+    slow = Slow()
+    monkeypatch.setattr(capture, "connect", slow)
+    recorder = capture.Recorder("ws://127.0.0.1:9/devtools/browser/none", lambda event: None)
+    recorder.start()
+    time.sleep(0.1)  # in the attempt
+    began = time.monotonic()
+
+    recorder.stop()
+
+    assert time.monotonic() - began < 1
+    assert recorder.error is None
+    assert recorder.running is False
+    assert slow.gave_up is False  # given up, and not waited for
