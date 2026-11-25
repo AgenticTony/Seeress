@@ -246,6 +246,24 @@ def epoch(ts: str) -> float:
         raise ValueError("the ts is no time this machine can place") from error
 
 
+@dataclass(frozen=True)
+class Schedule:
+    """When a person is meant to be working.
+
+    days holds the days of the week, 0 being Monday. start and end are the first and the
+    last hour of the day, so 8 and 17 is 08:00 to 18:00. The capture records by it, the
+    miner reads the record by it, and the settings file names it.
+    """
+
+    days: frozenset[int]
+    start: int
+    end: int
+
+
+# Monday to Friday, 08:00 to 18:00.
+DEFAULT_SCHEDULE = Schedule(frozenset({0, 1, 2, 3, 4}), 8, 17)
+
+
 def read_events(home: Path, hours: float | None = None, *, now: float | None = None) -> list[Event]:
     """The activity events in the record under home, oldest first.
 

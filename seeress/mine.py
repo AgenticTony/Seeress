@@ -20,6 +20,7 @@ from . import miner
 from .activity import (
     FlowRun,
     Interval,
+    Schedule,
     epoch,
     read_agent_runs,
     read_events,
@@ -27,7 +28,7 @@ from .activity import (
     read_outages,
 )
 from .brain import chat, endpoint_for, message
-from .config import seeress_home
+from .config import load_settings, seeress_home
 from .errors import MiningError
 from .miner import Ask, Candidate, Gap, Session, by_strength, name_of
 from .proposals import (
@@ -105,7 +106,9 @@ def mine(
     outages = read_outages(home, hours, now=moment)
     runs = read_agent_runs(home, hours, now=moment)
     kept = miner.without_runs(events, runs)
-    gaps = miner.gaps(kept, outages, now=moment)
+    # A settings file Seeress cannot read stops the mine: never a default slipped in.
+    schedule = load_settings(home).capture.schedule
+    gaps = miner.gaps(kept, outages, now=moment, schedule=schedule)
     sittings = miner.sessions(kept, outages=outages)
     found = _candidates(sittings)
     too_long = [candidate for candidate in found if candidate.days > DAYS_AT_MOST]
@@ -127,7 +130,17 @@ def mine(
         ]
     ]
     return _report(
-        home, hours, len(events), len(kept), sittings, outages, gaps, moment, pairs, len(too_long)
+        home,
+        hours,
+        len(events),
+        len(kept),
+        sittings,
+        outages,
+        gaps,
+        moment,
+        pairs,
+        len(too_long),
+        schedule,
     )
 
 
@@ -168,6 +181,7 @@ def _report(
     now: float,
     pairs: Sequence[tuple[Candidate, Proposal]],
     too_long: int,
+    schedule: Schedule,
 ) -> str:
     """What was mined, then where the record has no data, then the proposals.
 
@@ -176,7 +190,7 @@ def _report(
     """
     lines = [
         f"Mined {_window(hours)}: {_count(mined, 'event')} in {_count(len(sittings), 'sitting')}.",
-        _no_data(recorded, sittings, outages, gaps, now),
+        _no_data(recorded, sittings, outages, gaps, now, schedule),
     ]
     lines.extend(_gap_lines(gaps))
     if too_long:
@@ -211,10 +225,12 @@ def _no_data(
     outages: Sequence[Interval],
     gaps: Sequence[Gap],
     now: float,
+    schedule: Schedule,
 ) -> str:
     """One line: the minutes in the schedule for which the record holds nothing, out of the
     scheduled minutes of the period. The period runs from the first sitting to now. An
-    outage is counted for the part of it that is in the period and in the schedule."""
+    outage is counted for the part of it that is in the period and in the schedule. The
+    schedule is the one in the settings."""
     if not sittings:
         if recorded:
             return (
@@ -224,10 +240,10 @@ def _no_data(
             )
         return "Time with no data: no event can be placed in the schedule."
     first = epoch(sittings[0].start)
-    scheduled = miner.scheduled(first, now)
+    scheduled = miner.scheduled(first, now, schedule)
     silent = sum(epoch(gap.end) - epoch(gap.start) for gap in gaps if gap.why == "silent")
     down = sum(
-        miner.scheduled(max(outage.start, first), min(outage.end, now))
+        miner.scheduled(max(outage.start, first), min(outage.end, now), schedule)
         for outage in outages
         if not outage.empty
     )

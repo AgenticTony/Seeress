@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from seeress import config
+from seeress import activity, config
 from seeress.errors import ConfigError
 
 PORT_FILE = Path("Library/Application Support/Google/Chrome/DevToolsActivePort")
@@ -212,3 +212,98 @@ def test_client_env_is_empty_even_when_chrome_is_running(home: Path) -> None:
     port_file.write_text("9333\n/devtools/browser/abc-def\n")
 
     assert config.browser_env("client") == {}
+
+
+# ------------------------------------------------------- capture settings ---
+
+
+CAPTURE = """
+[capture]
+days = ["mon", "wed", "fri"]
+from = "09:00"
+to = "17:00"
+keep_days = 7
+"""
+
+
+def test_the_capture_settings_are_read(home: Path) -> None:
+    settings_file(home, CAPTURE)
+
+    capture = config.load_settings().capture
+
+    assert (capture.days, capture.start, capture.end, capture.keep_days) == (
+        frozenset({0, 2, 4}),
+        9,
+        16,
+        7,
+    )
+    assert capture.schedule == activity.Schedule(frozenset({0, 2, 4}), 9, 16)
+
+
+def test_the_capture_settings_by_default_are_monday_to_friday_eight_to_six(
+    home: Path,
+) -> None:
+    """For thirty days. They are the schedule the miner has always kept."""
+    capture = config.load_settings().capture
+
+    assert (capture.days, capture.start, capture.end, capture.keep_days) == (
+        frozenset({0, 1, 2, 3, 4}),
+        8,
+        17,
+        30,
+    )
+    from seeress import miner
+
+    assert capture.schedule == activity.DEFAULT_SCHEDULE
+    assert capture.schedule == miner.DEFAULT_SCHEDULE
+
+
+def test_a_settings_file_without_the_capture_section_has_the_defaults(home: Path) -> None:
+    settings_file(home, CLIENT_DOMAINS)
+
+    assert config.load_settings().capture == config.CaptureSettings()
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        pytest.param(
+            '[capture]\nday = ["mon"]\n', "unknown setting 'day'", id="a key it does not know"
+        ),
+        pytest.param('[capture]\ndays = ["monday"]\n', "'days'", id="a day not of the seven"),
+        pytest.param('[capture]\ndays = ["MON"]\n', "'days'", id="a day in upper case"),
+        pytest.param("[capture]\ndays = []\n", "'days'", id="no day at all"),
+        pytest.param('[capture]\ndays = "mon"\n', "'days'", id="days as a text"),
+        pytest.param("[capture]\ndays = [1]\n", "'days'", id="a day as a number"),
+        pytest.param('[capture]\nfrom = "08:30"\n', "'from'", id="a start with minutes"),
+        pytest.param('[capture]\nto = "18:30"\n', "'to'", id="an end with minutes"),
+        pytest.param('[capture]\nfrom = "8:00"\n', "'from'", id="a start not written as HH:00"),
+        pytest.param('[capture]\nfrom = "25:00"\n', "'from'", id="an hour that is none"),
+        pytest.param("[capture]\nfrom = 8\n", "'from'", id="a start as a number"),
+        pytest.param('[capture]\nto = "07:00"\n', "'to'", id="an overnight schedule"),
+        pytest.param('[capture]\nto = "08:00"\n', "'to'", id="a schedule with no time in it"),
+        pytest.param("[capture]\nkeep_days = 0\n", "'keep_days'", id="nothing kept"),
+        pytest.param('[capture]\nkeep_days = "30"\n', "'keep_days'", id="days as a text"),
+        pytest.param("[capture]\nkeep_days = 2.5\n", "'keep_days'", id="days with a fraction"),
+        pytest.param("[capture]\nkeep_days = true\n", "'keep_days'", id="days as true"),
+    ],
+)
+def test_a_capture_setting_seeress_cannot_understand_is_refused(
+    home: Path, text: str, message: str
+) -> None:
+    """Never skipped: an ignored setting could be the one that was meant to keep the
+    capture to working hours."""
+    path = settings_file(home, text)
+
+    with pytest.raises(ConfigError) as caught:
+        config.load_settings()
+
+    assert str(path) in str(caught.value)
+    assert message in str(caught.value)
+
+
+def test_a_capture_setting_that_is_no_table_is_refused(home: Path) -> None:
+    settings_file(home, "capture = 1\n")
+
+    with pytest.raises(ConfigError, match="'capture' must be a table"):
+        config.load_settings()

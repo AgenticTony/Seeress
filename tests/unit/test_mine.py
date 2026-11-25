@@ -893,3 +893,17 @@ def test_a_dismissed_proposal_that_recurs_is_left_as_the_user_saw_it(tmp_path: P
     assert kept is not None
     assert (kept.status, kept.goal, kept.confidence) == ("dismissed", "First sentence.", 4)
     assert "Second sentence." not in report
+
+
+def test_the_gaps_follow_the_schedule_of_the_settings(tmp_path: Path) -> None:
+    """The settings say Wednesday only, from nine to ten. Of that hour the three rituals at
+    nine hold three minutes and two seconds. The hole begins the second after the last
+    event, and is 57 minutes and 59 seconds, which is 58."""
+    week(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        '[capture]\ndays = ["wed"]\nfrom = "09:00"\nto = "10:00"\n', encoding="utf-8"
+    )
+
+    report = mine.mine(tmp_path, ask=None, now=NOW)
+
+    assert no_data(report) == "Time with no data: 58 of 60 minutes in the schedule (97%)."

@@ -19,7 +19,11 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
+from seeress.activity import (
+    DEFAULT_SCHEDULE as DEFAULT_SCHEDULE,
+)  # re-exported: the miner's schedule
 from seeress.activity import TS_FORMAT, Event, Interval, epoch
+from seeress.activity import Schedule as Schedule  # re-exported
 from seeress.errors import MiningError
 from seeress.proposals import Proposal, name_for
 
@@ -442,21 +446,8 @@ def _hour_of_first(sitting: Session, whole: frozenset[str]) -> int:
 # ------------------------------------------------------------------- the gaps ---
 
 
-@dataclass(frozen=True)
-class Schedule:
-    """When a person is meant to be working.
-
-    days holds the days of the week, 0 being Monday. start and end are the first and the
-    last hour of the day, so 8 and 17 is 08:00 to 18:00.
-    """
-
-    days: frozenset[int]
-    start: int
-    end: int
-
-
-# Monday to Friday, 08:00 to 18:00.
-DEFAULT_SCHEDULE = Schedule(frozenset({0, 1, 2, 3, 4}), 8, 17)
+# The schedule is in seeress/activity.py: the capture records by it, the miner reads the
+# record by it, and the settings name it.
 
 
 @dataclass(frozen=True)

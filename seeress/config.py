@@ -16,6 +16,12 @@ Settings that differ per machine live in SEERESS_HOME/config.toml (by default
     model = "tenant-large"                         # optional
     api_key_env = "TENANT_KEY"                     # optional
 
+    [capture]                                      # every key is optional
+    days = ["mon", "tue", "wed", "thu", "fri"]     # Monday to Friday when left out
+    from = "08:00"                                 # 08:00 when left out
+    to = "18:00"                                   # 18:00 when left out
+    keep_days = 30                                 # 30 when left out
+
 A file Seeress cannot understand raises ConfigError. It is never skipped: an ignored
 setting could be the one that keeps client pages away from a cloud model.
 """
@@ -26,10 +32,11 @@ import re
 import sys
 import tomllib
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .activity import Schedule
 from .errors import ConfigError
 
 CONFIG_FILE = "config.toml"
@@ -91,12 +98,36 @@ _HOSTNAME = re.compile(
 )
 
 
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+@dataclass(frozen=True)
+class CaptureSettings:
+    """When the capture records, and for how long it keeps what it recorded.
+
+    start and end are the hours of the schedule, its first and its last. In the settings
+    file the end is written as the time the capture stops, so "18:00" is an end of 17.
+    """
+
+    days: frozenset[int] = frozenset({0, 1, 2, 3, 4})
+    start: int = 8
+    end: int = 17
+    keep_days: int = 30
+
+    @property
+    def schedule(self) -> Schedule:
+        """The schedule of the capture, as the miner reads one."""
+        return Schedule(self.days, self.start, self.end)
+
+
 @dataclass(frozen=True)
 class Settings:
-    """What the settings file says. Without a file, everything is empty."""
+    """What the settings file says. Without a file, the lists are empty and the capture
+    keeps its defaults."""
 
     client_domains: tuple[str, ...] = ()
     endpoints: tuple[Endpoint, ...] = ()
+    capture: CaptureSettings = field(default_factory=CaptureSettings)
 
 
 def seeress_home() -> Path:
@@ -154,20 +185,63 @@ def load_settings(home: Path | None = None) -> Settings:
     endpoints = document.get("endpoints", [])
     if not isinstance(endpoints, list):
         raise ConfigError(f"{path}: 'endpoints' must be a list of tables")
+    capture = document.get("capture", {})
+    if not isinstance(capture, dict):
+        raise ConfigError(f"{path}: 'capture' must be a table")
     return Settings(
         client_domains=_client_domains(routing, path),
         endpoints=tuple(_endpoint(item, path) for item in endpoints),
+        capture=_capture(capture, path),
     )
 
 
 def _table(document: Mapping[str, object], key: str, path: Path) -> Mapping[str, object]:
-    extra = sorted(set(document) - {"routing", "endpoints"})
+    extra = sorted(set(document) - {"routing", "endpoints", "capture"})
     if extra:
         raise ConfigError(f"{path}: unknown setting {extra[0]!r}")
     value = document.get(key, {})
     if not isinstance(value, dict):
         raise ConfigError(f"{path}: {key!r} must be a table")
     return value
+
+
+_HOUR = re.compile(r"([01][0-9]|2[0-3]):00")
+
+
+def _capture(raw: Mapping[str, object], path: Path) -> CaptureSettings:
+    """The [capture] table. Every key is optional, and each is refused unless it is whole:
+    a schedule with minutes in it, or a day of the week misspelt, would record at hours
+    nobody chose."""
+    unknown = sorted(set(raw) - {"days", "from", "to", "keep_days"})
+    if unknown:
+        raise ConfigError(f"{path}: unknown setting {unknown[0]!r}")
+    days = raw.get("days", list(DAYS[:5]))
+    if not isinstance(days, list) or not _are_days(days):
+        raise ConfigError(
+            f"{path}: 'days' must be a list of day names, and not empty: "
+            "mon, tue, wed, thu, fri, sat or sun, in lower case."
+        )
+    start = _hour(raw.get("from", "08:00"), "from", path)
+    stop = _hour(raw.get("to", "18:00"), "to", path)
+    if stop <= start:
+        raise ConfigError(
+            f"{path}: 'to' must be after 'from'. A schedule that runs past midnight is not taken."
+        )
+    keep_days = raw.get("keep_days", 30)
+    if isinstance(keep_days, bool) or not isinstance(keep_days, int) or keep_days < 1:
+        raise ConfigError(f"{path}: 'keep_days' must be a whole number of days, 1 or more.")
+    return CaptureSettings(frozenset(DAYS.index(day) for day in days), start, stop - 1, keep_days)
+
+
+def _are_days(days: list[object]) -> bool:
+    return bool(days) and all(isinstance(day, str) and day in DAYS for day in days)
+
+
+def _hour(value: object, key: str, path: Path) -> int:
+    """A whole hour written HH:00, as its number."""
+    if not isinstance(value, str) or (found := _HOUR.fullmatch(value)) is None:
+        raise ConfigError(f'{path}: {key!r} must be a whole hour written HH:00, as "08:00".')
+    return int(found.group(1))
 
 
 def _client_domains(routing: Mapping[str, object], path: Path) -> tuple[str, ...]:
