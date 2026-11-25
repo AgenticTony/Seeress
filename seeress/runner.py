@@ -2,7 +2,9 @@
 
 Every start of the browser tool goes through run_browser_tool, so every child gets the
 allow-listed environment from seeress.env and nothing else, and every call says which
-browser it means (seeress.bodies decides which that may be).
+browser it means (seeress.bodies decides which that may be). And every run is noted in the
+activity record: in attach mode the capture cannot tell the agent's tabs from the person's,
+so the miner leaves the minutes of a run out of the person's work.
 
 Two calls share that mechanism:
 - run_browser_attempt never raises over a failed step; it reports the exit code, the
@@ -13,10 +15,12 @@ Two calls share that mechanism:
 """
 
 import subprocess
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from . import config, env
+from .activity import note_agent_run
 from .errors import BrowserError
 
 STDOUT_CAP = 4000
@@ -61,11 +65,28 @@ def run_browser_tool(
     ws: str | None,
     timeout: float,
     code: str | None = None,
+    what: str = "probe",
+    name: str | None = None,
 ) -> StepResult:
     """Start the browser tool once and report what it did.
 
+    The run is noted in the activity record, from just before it to just after, however it
+    ended. what says what the run was: a task, a flow or a probe. name is the flow's, when
+    it was one.
+
     Raises BrowserError only when the tool could not be started at all.
     """
+    started = time.time()
+    try:
+        return _start(args, profile=profile, ws=ws, timeout=timeout, code=code)
+    finally:
+        note_agent_run(config.seeress_home(), started, time.time(), what, name)
+
+
+def _start(
+    args: Sequence[str], *, profile: str, ws: str | None, timeout: float, code: str | None
+) -> StepResult:
+    """Start the browser tool once, and report what it did."""
     try:
         proc = subprocess.run(
             [config.BU_CLI, *args],
@@ -86,7 +107,13 @@ def run_browser_tool(
 
 
 def run_browser_attempt(
-    code: str, *, profile: str, ws: str | None, timeout: float = 120.0
+    code: str,
+    *,
+    profile: str,
+    ws: str | None,
+    timeout: float = 120.0,
+    what: str = "probe",
+    name: str | None = None,
 ) -> StepResult:
     """Run code through the browser tool and report what happened.
 
@@ -97,14 +124,24 @@ def run_browser_attempt(
 
     Raises BrowserError only when the tool could not be started at all.
     """
-    return run_browser_tool([], profile=profile, ws=ws, timeout=timeout, code=code)
+    return run_browser_tool(
+        [], profile=profile, ws=ws, timeout=timeout, code=code, what=what, name=name
+    )
 
 
 def run_browser_command(
-    code: str, *, profile: str, ws: str | None, timeout: float = 120.0
+    code: str,
+    *,
+    profile: str,
+    ws: str | None,
+    timeout: float = 120.0,
+    what: str = "probe",
+    name: str | None = None,
 ) -> StepResult:
     """Run Seeress's own step. Raise BrowserError unless it ran cleanly and exited zero."""
-    result = run_browser_attempt(code, profile=profile, ws=ws, timeout=timeout)
+    result = run_browser_attempt(
+        code, profile=profile, ws=ws, timeout=timeout, what=what, name=name
+    )
     if result.timed_out:
         raise BrowserError(f"the browser tool did not finish within {timeout:g} s")
     if result.returncode != 0:

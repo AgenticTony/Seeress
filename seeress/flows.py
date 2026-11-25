@@ -9,9 +9,10 @@ A flow runs on a door, so it passes the same door check and the same name check 
 """
 
 import re
+import time
 from pathlib import Path
 
-from . import bodies
+from . import activity, bodies, config
 from .agent import (
     code_block,
     ensure_browser,
@@ -22,7 +23,7 @@ from .agent import (
 )
 from .brain import Message, chat, endpoint_for, message
 from .browser_api import SYSTEM_PROMPT, check_code
-from .errors import FlowError, UnsafeCodeError
+from .errors import FlowError, SeeressError, UnsafeCodeError
 from .runner import run_browser_command
 
 FLOWS_DIR = Path(__file__).resolve().parent.parent / "flows"
@@ -70,6 +71,10 @@ def list_flows() -> list[Path]:
 def run_flow(name: str, profile: str, timeout: float = DEFAULT_TIMEOUT) -> str:
     """Run a saved flow once and return what it printed.
 
+    The run is noted in the activity record, from the moment the flow is found: a flow that
+    is not there did not run. A run that a SeeressError ends is noted as failed, with the
+    class of the error, and the error goes on raising.
+
     Raises FlowError when there is no such flow or the file is not allowed, and
     BrowserError when the browser tool did not exit zero.
     """
@@ -79,11 +84,24 @@ def run_flow(name: str, profile: str, timeout: float = DEFAULT_TIMEOUT) -> str:
         existing = ", ".join(flow.stem for flow in list_flows()) or "(none)"
         raise FlowError(f"no flow named {name!r}. existing: {existing}")
     code = path.read_text(encoding="utf-8")
-    check_code(code)  # a saved file can be edited by anything
-    ensure_browser(profile)
-    result = run_browser_command(
-        code, profile=profile, ws=bodies.address_for(profile), timeout=timeout
-    )
+    started = time.time()
+    home = config.seeress_home()
+    try:
+        # a saved file can be edited by anything
+        check_code(code)
+        ensure_browser(profile)
+        result = run_browser_command(
+            code,
+            profile=profile,
+            ws=bodies.address_for(profile),
+            timeout=timeout,
+            what="flow",
+            name=name,
+        )
+    except SeeressError as error:
+        activity.note_flow_run(home, activity.clock(started), name, 1, type(error).__name__)
+        raise
+    activity.note_flow_run(home, activity.clock(started), name, 0, None)
     return result.stdout.strip()
 
 

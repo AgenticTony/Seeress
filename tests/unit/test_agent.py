@@ -4,12 +4,13 @@ Tests whose names start with `test_defect_` pin behaviour that Phase 0 changes o
 purpose. The rest must keep passing through every refactor.
 """
 
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from seeress import agent, bodies, brain, browser_api
+from seeress import agent, bodies, brain, browser_api, config
 from seeress.agent import CODE_RE
 from seeress.errors import IsolationError
 from tests.conftest import Patcher
@@ -201,6 +202,18 @@ def test_a_clean_step_gives_the_model_its_output(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(subprocess, "run", lambda args, **kwargs: Proc(stdout="  the answer\n"))
 
     assert agent.run_browser_step("print(1)", profile="personal") == "the answer"
+
+
+def test_a_step_of_a_task_is_noted_as_the_agents(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In attach mode the capture cannot tell the agent's tabs from the person's. The note
+    is what lets the miner leave those minutes out of the person's work."""
+    monkeypatch.setattr(subprocess, "run", lambda args, **kwargs: Proc(stdout="the answer"))
+
+    agent.run_browser_step("print(1)", profile="personal")
+
+    file = config.seeress_home() / "watch" / "agent-runs.jsonl"
+    (line,) = file.read_text(encoding="utf-8").splitlines()
+    assert json.loads(line)["what"] == "task"
 
 
 def answering(monkeypatch: pytest.MonkeyPatch, proc: Proc) -> list[dict[str, object]]:

@@ -11,9 +11,13 @@ written by hand, and a contract test keeps the two in agreement. read_events tur
 of the record into events, and skips every line that holds none. read_outages and
 read_agent_runs read the same record for the times at which it holds nothing of a person's:
 when the logger could not reach the browser, and when an agent was driving it.
+
+Seeress writes to the record for those two times alone: a note of every run of the browser
+tool, which is a run of the agent's, and a note of how every run of a saved flow ended.
 """
 
 import json
+import os
 import re
 import time
 from collections.abc import Iterator, Mapping
@@ -36,6 +40,10 @@ TARGET_SHAPE = re.compile(r"^[0-9a-f]{8}(?![\s\S])")
 
 # How the logger writes the second that ts holds.
 TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
+
+# The record is one person's browsing. A folder of it, and a file, are for the user alone.
+PRIVATE = 0o700
+PRIVATE_FILE = 0o600
 
 
 def _matches(shape: re.Pattern[str], value: object) -> bool:
@@ -317,3 +325,95 @@ def _when(value: object) -> float | None:
         return epoch(value)
     except ValueError:
         return None
+
+
+def clock(when: float) -> str:
+    """A moment in seconds since the epoch, in the form the logger writes a ts in."""
+    return time.strftime(TS_FORMAT, time.localtime(when))
+
+
+# --------------------------------------------------------- writing the record ---
+
+
+def note(home: Path, file: str, fields: Mapping[str, object]) -> None:
+    """Append one line to a file of the record under home, for the user alone.
+
+    The line is the fields as JSON. The folder is made when it is missing. Nothing is
+    raised when the line cannot be written: a note must never break the run it notes.
+    """
+    try:
+        watch = home / "watch"
+        watch.mkdir(mode=PRIVATE, parents=True, exist_ok=True)
+        opened = os.open(watch / file, os.O_WRONLY | os.O_CREAT | os.O_APPEND, PRIVATE_FILE)
+        with os.fdopen(opened, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(dict(fields), ensure_ascii=False) + "\n")
+    except OSError:
+        return
+
+
+def note_agent_run(home: Path, start: float, end: float, what: str, name: str | None) -> None:
+    """Note that the agent drove a person's browser from start to end.
+
+    what says what the run was: a task, a flow or a probe. name is the flow's, when it was
+    one. The miner reads the note to leave those minutes out of the person's work.
+    """
+    note(
+        home,
+        "agent-runs.jsonl",
+        {"start": clock(start), "end": clock(end), "what": what, "name": name},
+    )
+
+
+def note_flow_run(home: Path, ts: str, name: str, exit_status: int, error: str | None) -> None:
+    """Note how a run of a saved flow ended. error is the class of the error that ended it,
+    when one did."""
+    fields: dict[str, object] = {"ts": ts, "name": name, "exit": exit_status}
+    if error is not None:
+        fields["error"] = error
+    note(home, "flow-runs.jsonl", fields)
+
+
+@dataclass(frozen=True)
+class FlowRun:
+    """One run of a saved flow: when it began, which flow, and how it ended.
+
+    A run went well when exit is 0. error is the class of the error that ended a run that
+    did not.
+    """
+
+    ts: str
+    name: str
+    exit: int
+    error: str | None
+
+
+def read_flow_runs(home: Path) -> list[FlowRun]:
+    """Every run of a saved flow noted in the record under home, in the order written.
+
+    A missing file is no run. A line whose ts is no time, or whose name, exit or error is
+    not of its kind, is skipped. Nothing is written.
+    """
+    try:
+        lines = (home / "watch" / "flow-runs.jsonl").read_bytes().splitlines()
+    except FileNotFoundError:
+        return []
+    runs: list[FlowRun] = []
+    for line in lines:
+        data = _object(line)
+        if data is None:
+            continue
+        ts, name = data.get("ts"), data.get("name")
+        exit_status, error = data.get("exit"), data.get("error")
+        if not (
+            isinstance(ts, str)
+            and _matches(TS_SHAPE, ts)
+            and _when(ts) is not None
+            and isinstance(name, str)
+            and name
+            and isinstance(exit_status, int)
+            and not isinstance(exit_status, bool)
+            and (error is None or isinstance(error, str))
+        ):
+            continue
+        runs.append(FlowRun(ts, name, exit_status, error))
+    return runs

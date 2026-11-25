@@ -4,11 +4,12 @@ A flow passes the same door check and the same name check as a task. The browser
 the model are replaced by fakes.
 """
 
+import json
 from pathlib import Path
 
 import pytest
 
-from seeress import agent, bodies, browser_api, flows
+from seeress import activity, agent, bodies, browser_api, config, flows
 from seeress.errors import BrowserError, FlowError, UnsafeCodeError
 from seeress.runner import StepResult
 from tests.conftest import Patcher
@@ -31,6 +32,7 @@ class Wire:
         self.chats: list[list[Message]] = []
         self.replies: list[str] = [FINAL]
         self.exit_code = 0
+        self.runs: list[tuple[str, str | None]] = []
 
     def chat(self, endpoint: object, history: list[Message]) -> str:
         self.calls.append("chat")
@@ -43,11 +45,19 @@ class Wire:
         return "explored"
 
     def command(
-        self, code: str, *, profile: str, ws: str | None, timeout: float = 120.0
+        self,
+        code: str,
+        *,
+        profile: str,
+        ws: str | None,
+        timeout: float = 120.0,
+        what: str = "probe",
+        name: str | None = None,
     ) -> StepResult:
         """Behaves like the real strict call: a failed exit is an error."""
         self.calls.append(f"command:{profile}:{ws}")
         self.steps.append(code)
+        self.runs.append((what, name))
         result = StepResult(self.exit_code, "  a line of output\n", "", False)
         if not result.ok:
             raise BrowserError(f"the browser tool exited with code {self.exit_code}")
@@ -150,6 +160,87 @@ def test_a_saved_flow_that_is_not_allowed_is_refused_before_the_door_is_touched(
         flows.run_flow("alpha", profile="client")
     assert wired.steps == []
     assert wired.calls == []
+
+
+# ------------------------------------------------------- noting the use ---
+
+
+def noted(file: str) -> list[dict[str, object]]:
+    """The runs noted in a file of the record under the Seeress home of the test."""
+    path = config.seeress_home() / "watch" / file
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_a_flow_that_ran_tells_the_tool_what_run_it_was(flows_dir: Path, wired: Wire) -> None:
+    (flows_dir / "alpha.py").write_text("print('hello')\n")
+
+    flows.run_flow("alpha", profile="client")
+
+    assert wired.runs == [("flow", "alpha")]
+
+
+def test_a_flow_that_ran_well_is_noted_as_such(flows_dir: Path, wired: Wire) -> None:
+    (flows_dir / "alpha.py").write_text("print('hello')\n")
+
+    flows.run_flow("alpha", profile="client")
+
+    (run,) = noted("flow-runs.jsonl")
+    assert list(run) == ["ts", "name", "exit"]
+    assert (run["name"], run["exit"]) == ("alpha", 0)
+    assert isinstance(run["ts"], str) and activity.TS_SHAPE.fullmatch(run["ts"])
+
+
+def test_a_flow_that_failed_is_noted_as_failed_and_the_error_goes_on(
+    flows_dir: Path, wired: Wire
+) -> None:
+    (flows_dir / "alpha.py").write_text("print('hello')\n")
+    wired.exit_code = 1
+
+    with pytest.raises(BrowserError, match="exited with code 1"):
+        flows.run_flow("alpha", profile="client")
+
+    assert noted("flow-runs.jsonl") == [
+        {
+            "ts": noted("flow-runs.jsonl")[0]["ts"],
+            "name": "alpha",
+            "exit": 1,
+            "error": "BrowserError",
+        }
+    ]
+
+
+def test_a_flow_that_is_not_allowed_is_noted_as_failed_before_it_ran(
+    flows_dir: Path, wired: Wire
+) -> None:
+    (flows_dir / "alpha.py").write_text("import os\nprint(os.getcwd())\n")
+
+    with pytest.raises(UnsafeCodeError):
+        flows.run_flow("alpha", profile="client")
+
+    (run,) = noted("flow-runs.jsonl")
+    assert (run["name"], run["exit"], run["error"]) == ("alpha", 1, "UnsafeCodeError")
+    assert wired.steps == []
+
+
+def test_a_flow_that_is_not_there_is_no_run(flows_dir: Path, wired: Wire) -> None:
+    with pytest.raises(FlowError, match="no flow named"):
+        flows.run_flow("alpha", profile="client")
+
+    assert noted("flow-runs.jsonl") == []
+
+
+def test_when_the_note_cannot_be_written_the_flow_runs_and_its_result_stands(
+    flows_dir: Path, wired: Wire
+) -> None:
+    """A note must never break the run it notes."""
+    home = config.seeress_home()
+    home.mkdir(parents=True)
+    (home / "watch").write_text("not a folder")
+    (flows_dir / "alpha.py").write_text("print('hello')\n")
+
+    assert flows.run_flow("alpha", profile="client") == "a line of output"
 
 
 # ----------------------------------------------------------- created ---

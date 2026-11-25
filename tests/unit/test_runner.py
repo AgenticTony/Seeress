@@ -3,12 +3,14 @@
 Each test replaces the call that starts the browser tool. Nothing here starts a process.
 """
 
+import json
 import subprocess
+from contextlib import suppress
 from typing import Any
 
 import pytest
 
-from seeress import config, runner
+from seeress import activity, config, runner
 from seeress.errors import BrowserError
 
 
@@ -211,3 +213,84 @@ def test_step_result_ok_is_false_for_a_non_zero_exit_and_for_a_timeout() -> None
     assert runner.StepResult(0, "", "", False).ok
     assert not runner.StepResult(2, "", "", False).ok
     assert not runner.StepResult(0, "", "", True).ok
+
+
+# ---------------------------------------------------- noting every run ---
+
+ADDRESS = "ws://127.0.0.1:9/devtools/browser/x"
+
+
+def noted() -> list[dict[str, object]]:
+    """The runs of the agent noted under the Seeress home of the test."""
+    file = config.seeress_home() / "watch" / "agent-runs.jsonl"
+    if not file.exists():
+        return []
+    lines = file.read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines]
+
+
+def test_every_run_of_the_tool_is_noted_with_when_it_began_and_when_it_ended(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    use(monkeypatch, Proc())
+
+    runner.run_browser_command("print(1)", profile="client", timeout=5, ws=ADDRESS)
+
+    (run,) = noted()
+    assert list(run) == ["start", "end", "what", "name"]
+    for key in ("start", "end"):
+        stamp = run[key]
+        assert isinstance(stamp, str) and activity.TS_SHAPE.fullmatch(stamp)
+
+
+def test_a_run_is_noted_as_a_probe_unless_told_otherwise(monkeypatch: pytest.MonkeyPatch) -> None:
+    use(monkeypatch, Proc())
+
+    runner.run_browser_command("print(1)", profile="client", timeout=5, ws=ADDRESS)
+
+    (run,) = noted()
+    assert (run["what"], run["name"]) == ("probe", None)
+
+
+def test_a_run_is_noted_with_what_it_was_and_its_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    use(monkeypatch, Proc())
+
+    runner.run_browser_command(
+        "print(1)", profile="client", timeout=5, ws=ADDRESS, what="flow", name="check-invoices"
+    )
+
+    (run,) = noted()
+    assert (run["what"], run["name"]) == ("flow", "check-invoices")
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        pytest.param(Proc(1), id="a failed step"),
+        pytest.param(OSError("no such tool"), id="a tool that could not be started"),
+        pytest.param(subprocess.TimeoutExpired("browser-use", 5), id="a step that timed out"),
+    ],
+)
+def test_a_run_is_noted_however_it_ended(
+    monkeypatch: pytest.MonkeyPatch, result: Proc | OSError | subprocess.TimeoutExpired
+) -> None:
+    use(monkeypatch, result)
+
+    with suppress(BrowserError):
+        runner.run_browser_command("print(1)", profile="client", timeout=5, ws=ADDRESS)
+
+    assert len(noted()) == 1
+
+
+def test_when_the_note_cannot_be_written_the_runs_own_result_stands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A note must never break the run it notes."""
+    home = config.seeress_home()
+    home.mkdir(parents=True)
+    (home / "watch").write_text("not a folder")
+    use(monkeypatch, Proc(0, "the answer"))
+
+    result = runner.run_browser_command("print(1)", profile="client", timeout=5, ws=ADDRESS)
+
+    assert result.stdout == "the answer"

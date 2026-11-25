@@ -45,7 +45,11 @@ def run_browser_step(code: str, timeout: float = STEP_TIMEOUT, profile: str = "p
     """
     try:
         result = run_browser_attempt(
-            code, profile=profile, ws=bodies.address_for(profile), timeout=timeout
+            code,
+            profile=profile,
+            ws=bodies.address_for(profile),
+            timeout=timeout,
+            what="task",
         )
     except BrowserError as exc:
         return f"[browser error] {exc}"

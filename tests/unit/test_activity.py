@@ -6,6 +6,7 @@ itself. Only the site, the path, the kind, the tab and the second may come out o
 """
 
 import json
+import stat
 import time
 from pathlib import Path
 from typing import Any
@@ -713,3 +714,121 @@ def test_the_readers_of_outages_and_runs_write_nothing(tmp_path: Path) -> None:
     activity.read_agent_runs(tmp_path, hours=1)
 
     assert files_under(tmp_path) == before
+
+
+# --------------------------------------------------------- writing the record ---
+
+FLOW_RUNS = "flow-runs.jsonl"
+
+
+def test_a_run_of_the_agent_is_noted_as_one_line_that_reads_back(tmp_path: Path) -> None:
+    activity.note_agent_run(
+        tmp_path,
+        activity.epoch("2026-11-20T09:00:00"),
+        activity.epoch("2026-11-20T09:05:00"),
+        "flow",
+        "check-invoices",
+    )
+
+    file = tmp_path / "watch" / "agent-runs.jsonl"
+    (line,) = file.read_text(encoding="utf-8").splitlines()
+    assert json.loads(line) == {
+        "start": "2026-11-20T09:00:00",
+        "end": "2026-11-20T09:05:00",
+        "what": "flow",
+        "name": "check-invoices",
+    }
+    assert activity.read_agent_runs(tmp_path) == [
+        between("2026-11-20T09:00:00", "2026-11-20T09:05:00")
+    ]
+
+
+def test_a_run_of_a_flow_that_failed_is_noted_as_one_line_that_reads_back(tmp_path: Path) -> None:
+    activity.note_flow_run(tmp_path, TS, "check-invoices", 1, "BrowserError")
+
+    file = tmp_path / "watch" / FLOW_RUNS
+    (line,) = file.read_text(encoding="utf-8").splitlines()
+    assert json.loads(line) == {
+        "ts": TS,
+        "name": "check-invoices",
+        "exit": 1,
+        "error": "BrowserError",
+    }
+    assert activity.read_flow_runs(tmp_path) == [
+        activity.FlowRun(TS, "check-invoices", 1, "BrowserError")
+    ]
+
+
+def test_a_run_of_a_flow_that_went_well_is_noted_without_an_error(tmp_path: Path) -> None:
+    activity.note_flow_run(tmp_path, TS, "check-invoices", 0, None)
+
+    file = tmp_path / "watch" / FLOW_RUNS
+    (line,) = file.read_text(encoding="utf-8").splitlines()
+    assert "error" not in json.loads(line)
+    assert activity.read_flow_runs(tmp_path) == [activity.FlowRun(TS, "check-invoices", 0, None)]
+
+
+def test_a_note_that_cannot_be_written_breaks_nothing(tmp_path: Path) -> None:
+    """A note must never break the run it notes."""
+    (tmp_path / "watch").write_text("not a folder")
+
+    activity.note_agent_run(tmp_path, 0.0, 1.0, "task", None)
+    activity.note_flow_run(tmp_path, TS, "check-invoices", 0, None)
+
+
+def test_a_note_is_for_the_user_alone(tmp_path: Path) -> None:
+    activity.note_agent_run(tmp_path, 0.0, 1.0, "task", None)
+
+    file = tmp_path / "watch" / "agent-runs.jsonl"
+    assert stat.S_IMODE(file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(file.parent.stat().st_mode) == 0o700
+
+
+def test_no_file_of_flow_runs_is_no_run(tmp_path: Path) -> None:
+    assert activity.read_flow_runs(tmp_path) == []
+
+
+def test_the_runs_of_flows_are_read_in_the_order_written(tmp_path: Path) -> None:
+    write(
+        tmp_path,
+        FLOW_RUNS,
+        {"ts": TS, "name": "alpha", "exit": 0},
+        {"ts": "2026-11-20T09:20:00", "name": "beta", "exit": 1, "error": "BrowserError"},
+    )
+
+    assert activity.read_flow_runs(tmp_path) == [
+        activity.FlowRun(TS, "alpha", 0, None),
+        activity.FlowRun("2026-11-20T09:20:00", "beta", 1, "BrowserError"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param("this line is not JSON", id="not JSON"),
+        pytest.param({"name": "alpha", "exit": 0}, id="no ts"),
+        pytest.param(
+            {"ts": "2026-11-20", "name": "alpha", "exit": 0}, id="a ts that is no timestamp"
+        ),
+        pytest.param(
+            {"ts": "2026-11-20T9:15:02", "name": "alpha", "exit": 0},
+            id="a ts the clock can read that is not of the logger's form",
+        ),
+        pytest.param(
+            {"ts": "2026-13-45T25:61:61", "name": "alpha", "exit": 0}, id="a ts that is no time"
+        ),
+        pytest.param({"ts": TS, "exit": 0}, id="no name"),
+        pytest.param({"ts": TS, "name": "", "exit": 0}, id="a name empty"),
+        pytest.param({"ts": TS, "name": "alpha"}, id="no exit"),
+        pytest.param({"ts": TS, "name": "alpha", "exit": "0"}, id="an exit that is not a number"),
+        pytest.param({"ts": TS, "name": "alpha", "exit": True}, id="an exit that is true"),
+        pytest.param(
+            {"ts": TS, "name": "alpha", "exit": 0, "error": 7}, id="an error that is not text"
+        ),
+        pytest.param([], id="not an object"),
+    ],
+)
+def test_a_line_of_the_flow_runs_that_does_not_read_is_skipped(tmp_path: Path, line: Any) -> None:
+    write(tmp_path, FLOW_RUNS, line, {"ts": TS, "name": "alpha", "exit": 0})
+
+    assert activity.read_flow_runs(tmp_path) == [activity.FlowRun(TS, "alpha", 0, None)]
