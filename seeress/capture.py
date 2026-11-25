@@ -56,9 +56,6 @@ MARKER = "seeress_body"
 BINDING = "seeressEvent"
 WORLD = "seeress"
 
-# The most the browser may say in one message, as the spike logger allows.
-MOST_AT_ONCE = 2**22
-
 # What the capture says of itself, for capture-status to read.
 STATUS_FILE = "capture-status.json"
 
@@ -901,7 +898,10 @@ async def watch(
     keeping: asyncio.Task[None] | None = None  # once the browser has let the capture in
     answered = False
     try:
-        async with connect(address, max_size=MOST_AT_ONCE, proxy=None) as socket:
+        # No bound on the size of one message. The capture is told whatever a page says
+        # to its console, and under a bound one large line from any page ended the
+        # connection, and the capture in every tab with it.
+        async with connect(address, max_size=None, proxy=None) as socket:
             if keep is not None:
                 keeping = asyncio.create_task(hourly(keep, every, ended))
             for command in sessions.opens():

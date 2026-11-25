@@ -3,6 +3,8 @@ listener in the page may read.
 
 A unit test cannot open a socket, so the connection is not tried here. The part of the
 capture that answers the browser is a plain object, and it is tried on invented messages.
+Where what is asked of the connection is the point, a stand-in takes the connection's
+place, and no socket is opened.
 tests/e2e/test_capture.py tries the listener and the connection on a browser that Seeress
 starts.
 """
@@ -1438,3 +1440,32 @@ def test_a_task_that_ended_with_an_error_is_read_when_it_is_left() -> None:
     asyncio.run(scenario())
 
     assert said == []
+
+
+# ------------------------------------------------------- the connection, in place ---
+
+
+def test_the_capture_s_connection_has_no_proxy_and_no_bound_on_one_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A proxy must never see what is said on this machine, and a bound on one message let
+    any page end the capture. A stand-in is asked for the connection in place of the
+    browser: it refuses, and what it was asked is read."""
+    asked: dict[str, object] = {}
+
+    class Refused:
+        def __init__(self, address: str, **options: object) -> None:
+            asked.update(options)
+
+        async def __aenter__(self) -> None:
+            raise OSError("nothing listens on 9")
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(capture, "connect", Refused)
+
+    with pytest.raises(OSError, match="nothing listens"):
+        asyncio.run(capture.watch("ws://127.0.0.1:9/devtools/browser/none", lambda event: None))
+
+    assert asked == {"max_size": None, "proxy": None}

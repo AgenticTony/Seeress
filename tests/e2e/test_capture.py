@@ -919,3 +919,31 @@ def test_the_browser_names_its_default_context_and_puts_its_tabs_in_it(
     ]
     assert pages
     assert all(info.get("browserContextId") == default for info in pages)
+
+
+def test_one_large_message_from_a_page_does_not_end_the_capture(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """Every tab has its runtime on, so what a page says to its console comes to the
+    capture. A message over the old bound of four mebibytes ended the connection, and every
+    tab with it."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        tab.wait_loaded()
+        tab.run("console.log('x'.repeat(5 * 2**20))")
+        waited_a_moment()
+        tab.click('[data-testid="save"]')
+        found = until(
+            lambda: recording.of_kind("click") or recording.recorder.error,
+            "a click after a large message from the page",
+            10,
+        )
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert recording.recorder.error is None, recording.recorder.error
+    (event,) = found
+    assert event.kind == "click"
