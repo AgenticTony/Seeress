@@ -1066,6 +1066,40 @@ def test_a_change_a_page_s_script_makes_on_a_select_is_not_taken_for_a_person_s(
     assert event.action == activity.Action("select", "select", 'select[name="country"]', None)
 
 
+def test_a_lone_surrogate_in_a_name_does_not_end_the_capture(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """An attribute may hold an unpaired surrogate, and no file can hold one. Before, the
+    write of the click raised UnicodeEncodeError, and that ended the capture in every tab:
+    a page could end it with one attribute. The name is made whole in the page, and the
+    click is recorded."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        tab.run(
+            "(() => { const b = document.createElement('button'); b.id = 'surrogate';"
+            " b.setAttribute('data-testid', 'probe-\\ud800-end');"
+            " document.body.appendChild(b); })()"
+        )
+        tab.click("#surrogate")
+        heard = until(
+            lambda: recording.of_kind("click") or recording.recorder.error,
+            "a click on the element so named",
+            10,
+        )
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert recording.recorder.error is None, repr(recording.recorder.error)
+    assert len(heard) == 1
+    assert heard[0].action is not None
+    assert heard[0].action.fingerprint == 'button[data-testid="probe-\ufffd-end"]'
+    assert heard[0].action.fingerprint.encode("utf-8")  # and so a file can hold it
+
+
 def test_prose_is_no_name_for_an_element(
     home: Path, browser: tuple[Browser, str], site: str
 ) -> None:

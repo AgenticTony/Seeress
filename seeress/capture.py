@@ -87,6 +87,12 @@ LISTENER = r"""(() => {
     // An identifier with a digit in it is another one on every visit, so its digits become #.
     const stable = (text) => text.replace(/[0-9]/g, "#");
 
+    // An attribute may hold an unpaired surrogate, and no file can hold one. The name is
+    // made whole in the page: an unpaired one becomes the replacement character, and the
+    // person's click is recorded. Before, writing such a click ended the capture in every
+    // tab, and one attribute in one page could end it.
+    const whole = (text) => text.toWellFormed();
+
     // Three attributes may name an element, as tag[name="value"], or none of them does.
     // An id with a digit in it is not stable, so it does not name an element. No attribute
     // that holds prose names one: an aria-label says something, often about a person, and a
@@ -94,7 +100,7 @@ LISTENER = r"""(() => {
     const attribute = (element, name, text) => {
       if (!text) return null;
       if (name === "id" && /[0-9]/.test(text)) return null;
-      return element.localName + "[" + name + '="' + stable(text) + '"]';
+      return element.localName + "[" + name + '="' + stable(whole(text)) + '"]';
     };
     const naming = (element) =>
       attribute(element, "data-testid", element.getAttribute("data-testid")) ||

@@ -1035,6 +1035,42 @@ def test_what_passes_the_gate_is_written_as_it_came_and_for_the_day_of_its_own_s
     assert [path.name for path in (tmp_path / "watch").iterdir()] == ["activity-20261120.jsonl"]
 
 
+def test_a_lone_surrogate_in_an_action_s_name_makes_no_event() -> None:
+    """A lone surrogate can be written in an attribute, and no file can hold it. The event
+    is refused where it is made, by the rule that reads one back, and the capture goes on:
+    before, the write raised UnicodeEncodeError, and that ended the capture."""
+    alone = json.loads('"\\ud800"')  # what json.loads makes of what the page sent
+    payload = {"type": "click", "tag": "button", "fingerprint": 'button[name="a' + alone + 'b"]'}
+
+    assert capture.event_for(json.dumps(payload), "https://example.org/", T1, WHEN) is None
+    with pytest.raises(ValueError):
+        activity.Event.parse(
+            {
+                "v": 1,
+                "ts": "2026-11-20T09:15:00",
+                "kind": "click",
+                "site": "example.org",
+                "path": "/",
+                "target": T1[:8],
+                "action": payload,
+            }
+        )
+
+    whole = json.loads('"\\ufffd"')  # the replacement character is whole, and is kept
+    kept = {"type": "click", "tag": "button", "fingerprint": 'button[name="a' + whole + 'b"]'}
+
+    assert capture.event_for(json.dumps(kept), "https://example.org/", T1, WHEN) is not None
+
+    late = {
+        "type": "click",
+        "tag": "button",
+        "fingerprint": 'button[name="' + "a" * 180 + alone + '"]',
+    }
+    assert len(late["fingerprint"]) <= 200  # and it is late in a long name
+
+    assert capture.event_for(json.dumps(late), "https://example.org/", T1, WHEN) is None
+
+
 def test_an_event_that_cannot_be_written_ends_the_gate_with_the_error(tmp_path: Path) -> None:
     """The gate writes through write_event, which raises. Nothing is swallowed."""
     (tmp_path / "watch").write_text("a file where the folder should be", encoding="utf-8")

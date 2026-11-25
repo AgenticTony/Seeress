@@ -200,6 +200,7 @@ def _action_in(data: object, kind: str) -> Action | None:
         and _matches(TAG_SHAPE, data["tag"])
         and isinstance(data["fingerprint"], str)
         and 1 <= len(data["fingerprint"]) <= FINGERPRINT_AT_MOST
+        and _can_be_written(data["fingerprint"])
         and (
             field in FIELD_KINDS
             if kind == "input"
@@ -421,6 +422,17 @@ def _event_in(data: dict[str, Any]) -> Event | None:
     if kind in ("nav", "tab_open"):
         return _from_address(data, "navigate", data.get("target"))
     return None
+
+
+def _can_be_written(text: str) -> bool:
+    """Whether a file can hold text, as UTF-8. A lone surrogate cannot be written, and a page
+    may put one in an attribute that names an element. An action with such a name is refused
+    where it is made, as it is where it is read back."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _from_address(data: Mapping[str, object], kind: str, target: object) -> Event | None:
