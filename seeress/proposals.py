@@ -120,12 +120,13 @@ def _fields(
 
 
 def _sites(value: object) -> tuple[str, ...] | None:
-    """The sites of a flow or a proposal, or None when the schema would refuse them."""
+    """The sites of a flow or a proposal, in their order, or None when the schema would
+    refuse them. A site may come again: the order is the sequence."""
     if not isinstance(value, list) or not 1 <= len(value) <= SITES_AT_MOST:
         return None
     if not all(_matches(SITE_SHAPE, site) for site in value):
         return None
-    return None if len(set(value)) != len(value) else tuple(value)
+    return tuple(value)
 
 
 def _steps(value: object) -> tuple[Step, ...] | None:

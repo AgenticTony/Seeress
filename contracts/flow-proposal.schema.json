@@ -19,13 +19,12 @@
       "type": "array",
       "minItems": 1,
       "maxItems": 50,
-      "uniqueItems": true,
       "items": {
         "type": "string",
         "pattern": "^(?!www\\.)[a-z0-9._-]+(?![\\s\\S])",
         "description": "A site: the host name in lower case, without a leading 'www.' A browser accepts an underscore in a host name, as intranet servers often have one, and so does a site"
       },
-      "description": "The sites of the pattern. In the order of the pattern when order is 'fixed'; most often seen first when it is 'varies'"
+      "description": "The sites of the pattern. In the order of the pattern when order is 'fixed', and a site may come again in it; most often seen first when it is 'varies', and then no site is named twice"
     },
     "steps": {
       "type": "array",

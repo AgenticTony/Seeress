@@ -20,13 +20,12 @@
       "type": "array",
       "minItems": 1,
       "maxItems": 50,
-      "uniqueItems": true,
       "items": {
         "type": "string",
         "pattern": "^(?!www\\.)[a-z0-9._-]+(?![\\s\\S])",
         "description": "A site: the host name in lower case, without a leading 'www.' A browser accepts an underscore in a host name, as intranet servers often have one, and so does a site"
       },
-      "description": "The sites the task visits, in the order of first appearance"
+      "description": "The sites the task visits, in order. A site may come again: going to one site, looking at another and coming back is another sequence than going to the two"
     },
     "steps": {
       "type": "array",

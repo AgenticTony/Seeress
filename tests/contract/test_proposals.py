@@ -114,6 +114,8 @@ FLOW_VALID = [
         sites=["sap-01.corp.example", "intranet", "localhost", "x-y.z"],
     ),
     flow(name="a", sites=["a"]),
+    # A site may come again. a → b → a is another sequence than a → b.
+    flow(sites=[A_SITE, ANOTHER, A_SITE]),
     flow(sites=[A_SITE, "intranet_server"]),
 ]
 
@@ -142,7 +144,6 @@ FLOW_REFUSED: list[pytest.ParameterSet] = [
     pytest.param(flow(sites=[]), id="sites empty"),
     pytest.param(flow(sites=A_SITE), id="sites not a list"),
     pytest.param(flow(sites=[f"s{i}.example" for i in range(51)]), id="51 sites"),
-    pytest.param(flow(sites=[A_SITE, ANOTHER, A_SITE]), id="a site twice"),
     pytest.param(flow(sites=[A_SITE, 7]), id="a site of another type"),
     pytest.param(flow(sites=[A_SITE, "www.mail.example.net"]), id="a site starting with www."),
     pytest.param(flow(sites=[A_SITE, "Mail.Example.net"]), id="a site with a capital letter"),
@@ -222,6 +223,7 @@ def test_a_flow_is_written_with_its_fields_in_the_schemas_order() -> None:
 
 PROPOSAL_VALID = [
     proposal(),
+    proposal(sites=[A_SITE, ANOTHER, A_SITE]),
     proposal(goal="", confidence=None),
     proposal(steps=[A_STEP], status="approved", goal="Check the invoices every morning."),
     proposal(steps=[A_STEP], status="compiled"),

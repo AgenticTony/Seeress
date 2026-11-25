@@ -229,6 +229,25 @@ def test_a_site_seen_on_its_own_on_many_days_is_no_candidate() -> None:
     assert miner.recurring(miner.sessions(events)) == []
 
 
+def test_a_sequence_that_comes_back_to_a_site_is_a_candidate_of_three_sites() -> None:
+    """a → e → a: go to one site, look at another, come back. It is another sequence than
+    a → e, and the longer one is returned."""
+    events = [event for day in THREE_DAYS for event in sitting(day, "aea")]
+
+    found = miner.recurring(miner.sessions(events))
+
+    assert [candidate.sites for candidate in found] == [("a", "e", "a")]
+
+
+def test_a_sequence_that_comes_back_to_a_site_becomes_a_proposal_that_reads_back() -> None:
+    events = [event for day in THREE_DAYS for event in sitting(day, "aea")]
+
+    (made,) = miner.propose(miner.recurring(miner.sessions(events)), None)
+
+    assert made.sites == ("a", "e", "a")
+    assert proposals.Proposal.parse(made.as_dict()) == made
+
+
 def test_a_b_c_on_monday_wednesday_and_friday_is_a_candidate_with_three_days() -> None:
     events = [event for day in THREE_DAYS for event in sitting(day, "abc")]
 
@@ -664,6 +683,13 @@ def test_no_sitting_is_no_cluster() -> None:
     assert miner.clusters([]) == []
 
 
+def test_a_site_held_on_its_own_is_no_cluster() -> None:
+    """A site on its own is only the first step towards a pair. It takes two."""
+    events = sitting(MONDAY, "ax") + sitting(WEDNESDAY, "bx") + sitting(FRIDAY, "cx")
+
+    assert miner.clusters(miner.sessions(events)) == []
+
+
 def test_a_cluster_counts_days_and_not_sittings() -> None:
     events = sitting(MONDAY, "abc", 9) + sitting(MONDAY, "abc", 14) + sitting(WEDNESDAY, "abc")
 
@@ -709,7 +735,16 @@ def test_a_hole_of_forty_minutes_on_a_tuesday_morning_is_one_silent_gap() -> Non
 
     found = miner.gaps(events, [], now=activity.epoch(at(TUESDAY, "11:00:00")))
 
-    assert found == [miner.Gap(at(TUESDAY, "10:00:00"), at(TUESDAY, "10:40:00"), 40, "silent")]
+    assert found == [miner.Gap(at(TUESDAY, "10:00:01"), at(TUESDAY, "10:40:00"), 40, "silent")]
+
+
+def test_a_gap_of_silence_begins_the_second_after_the_last_event() -> None:
+    """The second of an event holds data. The first second that holds none is the next."""
+    events = [visit("a", at(TUESDAY, "10:00:00")), visit("a", at(TUESDAY, "10:40:00"))]
+
+    (found,) = miner.gaps(events, [], now=activity.epoch(at(TUESDAY, "11:00:00")))
+
+    assert (found.start, found.end) == (at(TUESDAY, "10:00:01"), at(TUESDAY, "10:40:00"))
 
 
 def test_the_same_hole_on_a_saturday_is_none() -> None:
@@ -723,7 +758,7 @@ def test_a_hole_from_17_50_to_19_00_on_a_weekday_is_a_gap_of_ten_minutes() -> No
 
     found = miner.gaps(events, [], now=activity.epoch(at(TUESDAY, "20:00:00")))
 
-    assert found == [miner.Gap(at(TUESDAY, "17:50:00"), at(TUESDAY, "18:00:00"), 10, "silent")]
+    assert found == [miner.Gap(at(TUESDAY, "17:50:01"), at(TUESDAY, "18:00:00"), 10, "silent")]
 
 
 def test_a_hole_with_an_outage_inside_it_is_silent_only_around_the_outage() -> None:
@@ -733,7 +768,7 @@ def test_a_hole_with_an_outage_inside_it_is_silent_only_around_the_outage() -> N
     found = miner.gaps(events, outages, now=activity.epoch(at(TUESDAY, "12:00:00")))
 
     assert found == [
-        miner.Gap(at(TUESDAY, "10:00:00"), at(TUESDAY, "10:30:00"), 30, "silent"),
+        miner.Gap(at(TUESDAY, "10:00:01"), at(TUESDAY, "10:30:00"), 30, "silent"),
         miner.Gap(at(TUESDAY, "10:30:00"), at(TUESDAY, "11:00:00"), 30, "down"),
         miner.Gap(at(TUESDAY, "11:00:00"), at(TUESDAY, "12:00:00"), 60, "silent"),
     ]
@@ -744,7 +779,7 @@ def test_a_hole_after_the_last_event_counts_up_to_now() -> None:
 
     found = miner.gaps(events, [], now=activity.epoch(at(TUESDAY, "16:00:00")))
 
-    assert found == [miner.Gap(at(TUESDAY, "15:00:00"), at(TUESDAY, "16:00:00"), 60, "silent")]
+    assert found == [miner.Gap(at(TUESDAY, "15:00:01"), at(TUESDAY, "16:00:00"), 60, "silent")]
 
 
 def test_no_hole_is_counted_after_the_last_event_when_now_is_near() -> None:
@@ -765,7 +800,7 @@ def test_a_hole_across_the_evening_is_one_gap_per_day() -> None:
     found = miner.gaps(events, [], now=activity.epoch(at(WEDNESDAY, "09:00:00")))
 
     assert found == [
-        miner.Gap(at(TUESDAY, "17:00:00"), at(TUESDAY, "18:00:00"), 60, "silent"),
+        miner.Gap(at(TUESDAY, "17:00:01"), at(TUESDAY, "18:00:00"), 60, "silent"),
         miner.Gap(at(WEDNESDAY, "08:00:00"), at(WEDNESDAY, "09:00:00"), 60, "silent"),
     ]
 
@@ -775,7 +810,7 @@ def test_a_gap_of_less_than_a_minute_is_still_returned() -> None:
 
     found = miner.gaps(events, [], now=activity.epoch(at(TUESDAY, "19:00:00")))
 
-    assert found == [miner.Gap(at(TUESDAY, "17:59:30"), at(TUESDAY, "18:00:00"), 0, "silent")]
+    assert found == [miner.Gap(at(TUESDAY, "17:59:31"), at(TUESDAY, "18:00:00"), 0, "silent")]
 
 
 def test_a_schedule_of_the_users_own_is_used() -> None:
@@ -809,6 +844,33 @@ def test_an_outage_is_reported_when_no_event_was_ever_written() -> None:
     assert found == [miner.Gap(at(TUESDAY, "10:00:00"), at(TUESDAY, "10:37:00"), 37, "down")]
 
 
+def test_an_outage_of_no_second_is_reported_and_cuts_no_hole_in_two() -> None:
+    """The logger wrote chrome_down and connected in one second. It was down for no second,
+    so it took none from the silence around it."""
+    events = [visit("a", at(TUESDAY, "10:00:00")), visit("a", at(TUESDAY, "12:00:00"))]
+    blink = [span(at(TUESDAY, "11:00:00"), at(TUESDAY, "11:00:00"))]
+
+    found = miner.gaps(events, blink, now=activity.epoch(at(TUESDAY, "12:00:00")))
+
+    assert found == [
+        miner.Gap(at(TUESDAY, "10:00:01"), at(TUESDAY, "12:00:00"), 120, "silent"),
+        miner.Gap(at(TUESDAY, "11:00:00"), at(TUESDAY, "11:00:00"), 0, "down"),
+    ]
+
+
+def test_an_outage_of_one_second_cuts_a_hole_in_two() -> None:
+    events = [visit("a", at(TUESDAY, "10:00:00")), visit("a", at(TUESDAY, "12:00:00"))]
+    blink = [span(at(TUESDAY, "11:00:00"), at(TUESDAY, "11:00:01"))]
+
+    found = miner.gaps(events, blink, now=activity.epoch(at(TUESDAY, "12:00:00")))
+
+    assert [(gap.start, gap.end, gap.why) for gap in found] == [
+        (at(TUESDAY, "10:00:01"), at(TUESDAY, "11:00:00"), "silent"),
+        (at(TUESDAY, "11:00:00"), at(TUESDAY, "11:00:01"), "down"),
+        (at(TUESDAY, "11:00:01"), at(TUESDAY, "12:00:00"), "silent"),
+    ]
+
+
 def test_no_event_and_no_outage_is_no_gap() -> None:
     assert miner.gaps([], [], now=0.0) == []
 
@@ -827,10 +889,10 @@ def test_gaps_come_oldest_first() -> None:
     found = miner.gaps(events, outages, now=activity.epoch(at(TUESDAY, "11:00:00")))
 
     assert [(gap.start, gap.why) for gap in found] == [
-        (at(MONDAY, "10:00:00"), "silent"),
-        (at(MONDAY, "11:00:00"), "silent"),
+        (at(MONDAY, "10:00:01"), "silent"),
+        (at(MONDAY, "11:00:01"), "silent"),
         (at(TUESDAY, "08:00:00"), "silent"),
-        (at(TUESDAY, "10:00:00"), "silent"),
+        (at(TUESDAY, "10:00:01"), "silent"),
         (at(TUESDAY, "10:20:00"), "down"),
         (at(TUESDAY, "10:40:00"), "silent"),
     ]

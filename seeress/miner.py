@@ -363,9 +363,11 @@ def clusters(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
         level = joined
 
     # Of the found sets, only the largest: the longest first, so that a part finds a whole
-    # to be held by.
+    # to be held by. A site on its own was only the first step towards a pair.
     largest: list[tuple[frozenset[str], int]] = []
     for sites, sitters in sorted(every, key=lambda item: (-len(item[0]), item[0])):
+        if len(sites) < LEAST_SITES:
+            continue
         whole = frozenset(sites)
         if all(not whole < found for found, _ in largest):
             largest.append((whole, sitters))
@@ -458,13 +460,19 @@ def gaps(
     between two events longer than gap, and the time from the last event to now, are
     returned as gaps of "silent": one per day, with every outage taken out and only the
     part inside the schedule kept.
+
+    The second of an event holds data. So a hole begins with the second after the last
+    event, and ends with the second of the next. An outage ends with the second of the
+    connected line, and the silence may resume there. An outage of no second is still
+    returned, as a gap of 0 minutes, but it took no second from the silence around it.
     """
     down = sorted((outage for outage in outages if not outage.empty), key=lambda o: o.start)
     found = [_gap(outage.start, outage.end, "down") for outage in down]
+    took = [outage for outage in down if outage.end > outage.start]
     moments = sorted({when for when, _ in _placed(events)})
     for start, end in zip(moments, [*moments[1:], now], strict=False):
         if end - start > gap:
-            holes = _without_outages(Interval(start, end), down)
+            holes = _without_outages(Interval(start + 1, end), took)
             found.extend(
                 _gap(part.start, part.end, "silent")
                 for hole in holes

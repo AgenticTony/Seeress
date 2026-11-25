@@ -167,7 +167,7 @@ def test_time_with_no_data_is_given_against_the_scheduled_time(tmp_path: Path) -
     report = mine.mine(tmp_path, ask=None, now=activity.epoch(at(TUESDAY, "18:00:00")))
 
     assert "Time with no data: 60 of 600 minutes in the schedule (10%)." in report
-    assert f"  {at(TUESDAY, '08:00:00')} to 09:00:00   60 min  nothing was written" in report
+    assert f"  {at(TUESDAY, '08:00:01')} to 09:00:00   60 min  nothing was written" in report
 
 
 def test_an_outage_is_listed_as_the_logger_being_down(tmp_path: Path) -> None:
