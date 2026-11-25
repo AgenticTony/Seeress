@@ -306,18 +306,9 @@ def info(
     }
 
 
-def no_context(about: dict[str, Any]) -> dict[str, Any]:
-    """The same, as a browser that names no context on a tab of its default one says it."""
-    return {name: value for name, value in about.items() if name != "browserContextId"}
-
-
-def contexts(default: str | None = DEFAULT) -> dict[str, Any]:
-    """The answer to the second command: which context is the default one. A browser that
-    names none leaves it out."""
-    answer: dict[str, Any] = {"browserContextIds": []}
-    if default is not None:
-        answer["defaultBrowserContextId"] = default
-    return answer
+def contexts(default: str = DEFAULT) -> dict[str, Any]:
+    """The answer to the second command: which context is the default one."""
+    return {"browserContextIds": [], "defaultBrowserContextId": default}
 
 
 def targets(*open: dict[str, Any]) -> dict[str, Any]:
@@ -363,10 +354,10 @@ class Held:
     what it sent, and what it would write.
 
     open are the tabs the browser says are open. default is the context it names as its
-    default one, or None for a browser that names none.
+    default one.
     """
 
-    def __init__(self, *open: dict[str, Any], default: str | None = DEFAULT) -> None:
+    def __init__(self, *open: dict[str, Any], default: str = DEFAULT) -> None:
         self.events: list[activity.Event] = []
         self.sessions = capture.Sessions(self.events.append)
         self.sent = self.sessions.opens()
@@ -608,18 +599,36 @@ def test_a_page_of_a_second_context_that_is_already_open_is_left_alone() -> None
     assert held.sessions.listened == frozenset()
 
 
-def test_a_browser_that_names_no_default_context_has_for_its_own_a_tab_that_names_none() -> None:
-    """An older browser says neither which context is its default one nor which a tab is
-    in, when it is in that one."""
-    held = Held(no_context(info()), default=None)
+@pytest.mark.parametrize(
+    ("at", "what"),
+    [
+        pytest.param(0, "to tell of its targets", id="what it will be told of"),
+        pytest.param(1, "which context is its default one", id="the default context"),
+        pytest.param(2, "which targets are open", id="the targets that are open"),
+    ],
+)
+def test_a_browser_that_refuses_what_the_capture_begins_by_asking_is_captured_from_no_more(
+    at: int, what: str
+) -> None:
+    """Without one of these the capture would be deaf, to the tabs that come, to what is the
+    browser's own, or to the tabs already open. It ends with an error that says so, instead
+    of going on connected and recording nothing."""
+    sessions = capture.Sessions(lambda event: None)
+    commands = sessions.opens()
 
-    assert held.methods() == [*OPENING, "Target.attachToTarget"]
-    assert held.hears(created(info(context=OTHER))) == []
-    assert held.hears(answer(3, targets(no_context(info())))) == []  # told of again
-    (another,) = held.hears(answer(3, targets(no_context(info(T2)))))
-    assert another["method"] == "Target.attachToTarget"  # another that names no context
-    named = Held(default=None)
-    assert named.hears(created(info())) == []  # a tab that names a context is not its own
+    with pytest.raises(CaptureError, match=what):
+        sessions.hears(refused(commands[at]["id"]), WHEN)
+
+
+def test_a_browser_that_names_no_default_context_is_captured_from_no_more() -> None:
+    """The capture listens to a tab only when the browser puts it in the context it names as
+    its default one. A browser that names none cannot be asked which tab is a person's and
+    which a private window, and nothing in it is captured."""
+    sessions = capture.Sessions(lambda event: None)
+    (_, contexts_id, _, _) = (command["id"] for command in sessions.opens())
+
+    with pytest.raises(CaptureError, match="default"):
+        sessions.hears(answer(contexts_id, {"browserContextIds": []}), WHEN)
 
 
 def test_an_event_is_written_when_the_listener_of_a_tab_reports() -> None:

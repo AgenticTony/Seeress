@@ -291,6 +291,9 @@ class Sessions:
         self._context_known = False  # once the browser has answered the second command
         self._no_marker = False  # once the browser has shown that it carries none
         self._cookies_command = 0  # the id of the command that asks for the cookies
+        # What the capture begins by asking, by the id of the command. A browser that
+        # refuses one of these is captured from no more.
+        self._opening: dict[int, str] = {}
 
     @property
     def listened(self) -> frozenset[str]:
@@ -300,15 +303,20 @@ class Sessions:
     def opens(self) -> list[dict[str, Any]]:
         """The first commands, in this order: the browser is asked to tell of every target
         from now on, which context is its default one, which targets are open now, and which
-        cookies it holds."""
-        opening = [
-            self._command("Target.setDiscoverTargets", {"discover": True}),
-            self._command("Target.getBrowserContexts", {}),
-            self._command("Target.getTargets", {}),
+        cookies it holds. A browser that refuses the first three is captured from no more:
+        without them the capture would be deaf, and go on as though it were not."""
+        asking = [
+            (
+                self._command("Target.setDiscoverTargets", {"discover": True}),
+                "to tell of its targets",
+            ),
+            (self._command("Target.getBrowserContexts", {}), "which context is its default one"),
+            (self._command("Target.getTargets", {}), "which targets are open"),
         ]
+        self._opening = {command["id"]: asked for command, asked in asking}
         cookies = self._command("Storage.getCookies", {})
         self._cookies_command = cookies["id"]
-        return [*opening, cookies]
+        return [command for command, _ in asking] + [cookies]
 
     def hears(self, message: object, when: float) -> list[dict[str, Any]]:
         """One message from the browser, and the commands to send back for it."""
@@ -372,8 +380,8 @@ class Sessions:
         return self._context_known and self._no_marker
 
     def _is_own(self, context: object) -> bool:
-        """True for the context the browser names as its default one. A browser that names
-        none has, for its own, a tab on which it names no context."""
+        """True for the context the browser named as its default one. Every tab that is not
+        in a private window is in it, and names it."""
         return self._context_known and context == self._default_context
 
     def _answered(self, identifier: object, result: object, error: object) -> list[dict[str, Any]]:
@@ -406,6 +414,12 @@ class Sessions:
         if waiting is not None and waiting[0] == "attach":
             self._tabs.pop(waiting[1], None)
             return []
+        asked = self._opening.pop(identifier, None)
+        if asked is not None:
+            # Deaf without it, and connected all the same: ended, and said.
+            raise CaptureError(
+                f"The browser could not be asked {asked}, so nothing in it is captured."
+            )
         if identifier == self._cookies_command:
             # A check that could not be made is no check: nothing is captured here.
             self._tabs.clear()
@@ -509,12 +523,18 @@ class Sessions:
         return []
 
     def _context_named(self, result: Mapping[str, object]) -> list[dict[str, Any]]:
-        """The browser has said which context is its default one: the default answer names
-        it. A browser that names none is taken to have no context id of its own, which is
-        what it writes on a tab of that context."""
+        """The browser has said which context is its default one. Without that the capture
+        cannot tell a tab from a private window, and nothing in it is captured. The real
+        browser names it in its answer, and a test on a real browser holds it to that."""
         if self._context_known:
             return []  # it is asked of once, at the start
-        self._default_context = result.get("defaultBrowserContextId")
+        default = result.get("defaultBrowserContextId")
+        if not isinstance(default, str) or not default:
+            raise CaptureError(
+                "The browser did not say which context is its default one, so nothing in it"
+                " is captured."
+            )
+        self._default_context = default
         self._context_known = True
         return [command for target in list(self._tabs) for command in self._attach(target)]
 

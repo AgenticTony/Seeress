@@ -919,3 +919,21 @@ def test_a_fingerprint_is_cut_whole_and_never_inside_a_character(
     written = recording.written()
     assert "\U0001f600" in written  # whole
     assert not any(0xD800 <= ord(char) <= 0xDFFF for char in written)  # and no half of one
+
+
+def test_the_browser_names_its_default_context_and_puts_its_tabs_in_it(
+    home: Path, browser: tuple[Browser, str]
+) -> None:
+    """The capture listens to a tab only when the browser puts it in the context it names as
+    its default one. What the real browser answers is held here, as it is."""
+    own, _ = browser
+
+    contexts = own.call("Target.getBrowserContexts")
+    default = contexts.get("defaultBrowserContextId")
+
+    assert isinstance(default, str) and default
+    pages = [
+        info for info in own.call("Target.getTargets")["targetInfos"] if info["type"] == "page"
+    ]
+    assert pages
+    assert all(info.get("browserContextId") == default for info in pages)
