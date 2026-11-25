@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "seeress://contracts/activity-event",
   "title": "Activity event",
-  "description": "One thing a person did in their browser, as everything that reads the activity record sees it. read_events in seeress/activity.py makes an event from a line of the record, and Event.parse there reads one back. An event is a site, a path with no query and no fragment, a kind, a tab and a second. It carries no page title, no typed text, no query, no fragment and no full URL: what may reach a model is the site, the path, the hour and counts.",
+  "description": "One thing a person did in their browser, as everything that reads the activity record sees it. read_events in seeress/activity.py makes an event from a line of the record, and Event.parse there reads one back. An event is a site, a path with no query and no fragment, a kind, a tab and a second. For a click, an input, a submit and a select it may also carry an action, which says what was done in the page and never what a field held. It carries no page title, no typed text, no query, no fragment and no full URL: what may reach a model is the site, the path, the hour and counts.",
   "type": "object",
   "properties": {
     "v": {
@@ -34,8 +34,84 @@
       "type": ["string", "null"],
       "pattern": "^[0-9a-f]{8}(?![\\s\\S])",
       "description": "The tab, by the first eight characters of its identifier, or null when the logger cannot name it"
+    },
+    "action": {
+      "type": "object",
+      "description": "What was done in the page, for a click, an input, a submit and a select, and for no other kind of event. A listener inside the page reports it, and that listener never reads what a field holds. An event that was not reported from inside a page has none",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["click", "input", "submit", "select"],
+          "description": "What was done. It is the event's kind"
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]*(?![\\s\\S])",
+          "description": "The element's tag name, in lower case. A custom element's name always holds a hyphen, so a tag may"
+        },
+        "fingerprint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "How the element is told apart on its page: its tag, and the first of data-testid, an id with no digit, a name and an aria-label that it has, with the digits of the others replaced by #. An element with none of the four is told apart by its place and the place of up to three parents. A value is cut at 200 characters"
+        },
+        "field": {
+          "type": "string",
+          "enum": [
+            "text",
+            "password",
+            "one-time-code",
+            "card",
+            "email",
+            "search",
+            "tel",
+            "url",
+            "number",
+            "date",
+            "checkbox",
+            "radio",
+            "file",
+            "other"
+          ],
+          "description": "The kind of the field an input was typed into. It is there when type is input, and only then. A password, a one-time code and a card are named by their kind, and what was typed is never read"
+        }
+      },
+      "required": ["type", "tag", "fingerprint"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"type": "object", "properties": {"type": {"const": "input"}}},
+          "then": {"required": ["field"]}
+        },
+        {
+          "if": {"type": "object", "properties": {"type": {"not": {"const": "input"}}}},
+          "then": {"not": {"required": ["field"]}}
+        }
+      ]
     }
   },
   "required": ["v", "ts", "kind", "site", "path", "target"],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {"required": ["action"]},
+      "then": {"properties": {"kind": {"enum": ["click", "input", "submit", "select"]}}}
+    },
+    {
+      "if": {"properties": {"kind": {"const": "click"}}},
+      "then": {"properties": {"action": {"properties": {"type": {"const": "click"}}}}}
+    },
+    {
+      "if": {"properties": {"kind": {"const": "submit"}}},
+      "then": {"properties": {"action": {"properties": {"type": {"const": "submit"}}}}}
+    },
+    {
+      "if": {"properties": {"kind": {"const": "select"}}},
+      "then": {"properties": {"action": {"properties": {"type": {"const": "select"}}}}}
+    },
+    {
+      "if": {"properties": {"kind": {"const": "input"}}},
+      "then": {"properties": {"action": {"properties": {"type": {"const": "input"}}}}}
+    }
+  ]
 }

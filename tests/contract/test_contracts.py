@@ -237,3 +237,218 @@ def test_the_reader_holds_the_schemas_own_patterns_and_words() -> None:
     assert activity.SITE_SHAPE.pattern == properties["site"]["pattern"]
     assert activity.PATH_SHAPE.pattern == properties["path"]["pattern"]
     assert activity.TARGET_SHAPE.pattern == properties["target"]["pattern"]
+
+
+# ------------------------------------------------------- the action of an event ---
+
+
+def click(**changes: Any) -> dict[str, Any]:
+    """An event that says a button was clicked, with its action changed as asked."""
+    action = {"type": "click", "tag": "button", "fingerprint": 'button[data-testid="save"]'}
+    return {**AN_EVENT, "kind": "click", "action": {**action, **changes}}
+
+
+def typed(**changes: Any) -> dict[str, Any]:
+    """An event that says a text field was typed into, with its action changed as asked."""
+    action = {
+        "type": "input",
+        "tag": "input",
+        "fingerprint": 'input[name="query"]',
+        "field": "text",
+    }
+    return {**AN_EVENT, "kind": "input", "action": {**action, **changes}}
+
+
+def without(instance: dict[str, Any], name: str) -> dict[str, Any]:
+    """The event without one member of its action."""
+    return {**instance, "action": {k: v for k, v in instance["action"].items() if k != name}}
+
+
+FIELDS = (
+    "password",
+    "one-time-code",
+    "card",
+    "email",
+    "search",
+    "tel",
+    "url",
+    "number",
+    "date",
+    "checkbox",
+    "radio",
+    "file",
+    "other",
+)
+
+ACCEPTED_ACTIONS = [
+    pytest.param(click(), id="click"),
+    pytest.param(
+        {
+            **AN_EVENT,
+            "kind": "submit",
+            "action": {"type": "submit", "tag": "form", "fingerprint": "form:nth-child(2)"},
+        },
+        id="submit",
+    ),
+    pytest.param(
+        {
+            **AN_EVENT,
+            "kind": "select",
+            "action": {"type": "select", "tag": "select", "fingerprint": 'select[id="country"]'},
+        },
+        id="select",
+    ),
+    pytest.param(typed(), id="input, text"),
+    *(pytest.param(typed(field=field), id=f"input, {field}") for field in FIELDS),
+    pytest.param(
+        typed(tag="textarea", fingerprint="textarea:nth-child(1)"),
+        id="input on a textarea, which has a type of its own",
+    ),
+    # A custom element's name always holds a hyphen, and a click often lands on one.
+    pytest.param(
+        click(tag="my-button", fingerprint="my-button:nth-child(3)"), id="tag of a custom element"
+    ),
+    pytest.param(click(tag="x1"), id="tag of one letter and a digit"),
+    pytest.param(click(tag="a.b_c-d"), id="tag with a dot and an underscore"),
+    pytest.param(click(fingerprint="x"), id="fingerprint of one character"),
+    pytest.param(click(fingerprint="x" * 200), id="fingerprint of 200 characters"),
+    pytest.param(click(fingerprint='input[aria-label="Sök"]'), id="fingerprint outside ASCII"),
+    pytest.param(click(fingerprint='button[id="a b"]'), id="fingerprint with a space"),
+]
+
+REFUSED_ACTIONS = [
+    pytest.param({**click(), "action": "click"}, id="action that is not an object"),
+    pytest.param({**click(), "action": ["click"]}, id="action that is a list"),
+    pytest.param({**click(), "action": None}, id="action that is null"),
+    pytest.param(click(type="navigate"), id="type outside the four: navigate"),
+    pytest.param(
+        {
+            **click(),
+            "kind": "navigate",
+            "action": {"type": "navigate", "tag": "button", "fingerprint": "x"},
+        },
+        id="a navigate whose action says navigate, as the logger's word would",
+    ),
+    pytest.param(click(type="hover"), id="type outside the four: hover"),
+    pytest.param(click(type="submit"), id="type says submit where the kind says click"),
+    pytest.param(click(type="Click"), id="type in upper case"),
+    pytest.param(click(type="input "), id="type ending in a space"),
+    pytest.param(click(type=1), id="type of another type"),
+    pytest.param(without(click(), "type"), id="type missing"),
+    pytest.param(click(tag="Input"), id="tag with an upper-case letter"),
+    pytest.param(click(tag="myButton"), id="tag in camel case, as an SVG element is named"),
+    pytest.param(click(tag="-button"), id="tag starting with a hyphen"),
+    pytest.param(click(tag="1button"), id="tag starting with a digit"),
+    pytest.param(click(tag="my button"), id="tag with a space"),
+    pytest.param(click(tag="button\n"), id="tag ending in a newline"),
+    pytest.param(click(tag=""), id="tag empty"),
+    pytest.param(click(tag=7), id="tag of another type"),
+    pytest.param(click(fingerprint=""), id="fingerprint empty"),
+    pytest.param(click(fingerprint="x" * 201), id="fingerprint of 201 characters"),
+    pytest.param(click(fingerprint=7), id="fingerprint of another type"),
+    pytest.param(without(click(), "fingerprint"), id="fingerprint missing"),
+    pytest.param(typed(field="color"), id="field outside its list"),
+    pytest.param(typed(field="Text"), id="field in upper case"),
+    pytest.param(typed(field=7), id="field of another type"),
+    pytest.param(click(field="text"), id="field on a click"),
+    pytest.param(click(field=None), id="a field of null on a click"),
+    pytest.param(
+        {
+            **AN_EVENT,
+            "kind": "submit",
+            "action": {
+                "type": "submit",
+                "tag": "form",
+                "fingerprint": "form:nth-child(2)",
+                "field": "text",
+            },
+        },
+        id="field on a submit",
+    ),
+    pytest.param(
+        {
+            **AN_EVENT,
+            "kind": "select",
+            "action": {
+                "type": "select",
+                "tag": "select",
+                "fingerprint": 'select[id="country"]',
+                "field": "other",
+            },
+        },
+        id="field on a select",
+    ),
+    pytest.param(without(typed(), "field"), id="input without a field"),
+    pytest.param(typed(field=None), id="input whose field is null"),
+    pytest.param(click(type="input", field="text"), id="type says input where the kind says click"),
+    # No field here, so that only the rule between the kind and the type refuses it.
+    pytest.param(
+        {
+            **AN_EVENT,
+            "kind": "input",
+            "action": {"type": "click", "tag": "button", "fingerprint": "x"},
+        },
+        id="type says click where the kind says input",
+    ),
+    pytest.param({**click(), "kind": "navigate"}, id="action on a navigate"),
+    pytest.param({**click(), "kind": "focus", "target": None}, id="action on a focus"),
+    pytest.param(
+        click(html="<button>Save</button>"),
+        id="a member the action does not know",
+    ),
+]
+
+
+@pytest.mark.parametrize("instance", ACCEPTED_ACTIONS)
+def test_the_schema_and_the_reader_agree_on_every_accepted_action(instance: object) -> None:
+    assert accepted(ACTIVITY_EVENT, instance)
+
+    event = activity.Event.parse(instance)
+
+    assert event.as_dict() == instance
+
+
+@pytest.mark.parametrize("instance", REFUSED_ACTIONS)
+def test_the_schema_and_the_reader_agree_on_every_refused_action(instance: object) -> None:
+    assert not accepted(ACTIVITY_EVENT, instance)
+
+    with pytest.raises(ValueError, match="unexpected shape"):
+        activity.Event.parse(instance)
+
+
+def test_an_action_is_returned_as_it_was_read() -> None:
+    """Its members come in the schema's order, and a field that is not there is not written."""
+    read, fieldless = activity.Event.parse(typed()), activity.Event.parse(click())
+
+    assert list(read.as_dict()) == ["v", "ts", "kind", "site", "path", "target", "action"]
+    assert read.as_dict()["action"] == typed()["action"]
+    assert fieldless.as_dict()["action"] == click()["action"]
+
+
+def test_the_reader_holds_the_action_s_own_words_and_patterns() -> None:
+    """The reader searches with the patterns the schema writes, and with its lists of words."""
+    action = ACTIVITY_EVENT["properties"]["action"]
+
+    assert list(activity.ACTION_TYPES) == action["properties"]["type"]["enum"]
+    assert list(activity.FIELD_KINDS) == action["properties"]["field"]["enum"]
+    assert activity.TAG_SHAPE.pattern == action["properties"]["tag"]["pattern"]
+    assert action["properties"]["fingerprint"]["maxLength"] == activity.FINGERPRINT_AT_MOST
+    assert list(activity.ACTION_REQUIRED) == action["required"]
+
+
+def test_the_rules_between_two_fields_are_written_where_the_fields_are() -> None:
+    """An instance shows only that the two agree on that instance. The rules themselves are
+    in the schema, where what crosses the boundary is written down once.
+
+    Five compare the kind of an event with its action, so they are the event's. Two compare
+    the type of an action with its field, so they are the action's, and say so only for an
+    object: an action that is not one is refused by its type and by nothing else."""
+    event_rules = ACTIVITY_EVENT["allOf"]
+    action_rules = ACTIVITY_EVENT["properties"]["action"]["allOf"]
+
+    assert len(event_rules) == 5
+    assert len(action_rules) == 2
+    for rule in (*event_rules, *action_rules):
+        assert set(rule) == {"if", "then"}
+    for rule in action_rules:
+        assert rule["if"]["type"] == "object"

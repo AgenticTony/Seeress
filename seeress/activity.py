@@ -4,7 +4,10 @@ The activity record holds more than Seeress needs to find repetitive work. A lin
 carries a page title and a full address, query included. An event is the part that may be
 used: the site, the path without its query and its fragment, the kind of thing that
 happened, the tab, and the second. What may reach a model is the site, the path, the hour
-and counts, so an event never carries a page title, typed text or a full URL.
+and counts, so an event never carries a page title, typed text or a full URL. For the four
+kinds that happen in a page, an event may also say what was done there: the element's tag,
+how the element is told apart on its page and, for an input, the kind of the field. It never
+says what a field held.
 
 The shape of an event is contracts/activity-event.schema.json. Event.parse is that schema
 written by hand, and a contract test keeps the two in agreement. read_events turns the lines
@@ -29,6 +32,29 @@ from urllib.parse import urlsplit
 # What an event says happened.
 KINDS: tuple[str, ...] = ("navigate", "focus", "click", "input", "submit", "select")
 
+# The kinds that an action can name. An action's type is the kind of its event.
+ACTION_TYPES: tuple[str, ...] = ("click", "input", "submit", "select")
+ACTION_REQUIRED: tuple[str, ...] = ("type", "tag", "fingerprint")
+# The kind of the field an input was typed into. The first three are named so that what was
+# typed is known to be secret. No kind ever carries what was typed.
+FIELD_KINDS: tuple[str, ...] = (
+    "text",
+    "password",
+    "one-time-code",
+    "card",
+    "email",
+    "search",
+    "tel",
+    "url",
+    "number",
+    "date",
+    "checkbox",
+    "radio",
+    "file",
+    "other",
+)
+EVENT_FIELDS = frozenset({"v", "ts", "kind", "site", "path", "target"})
+
 # The patterns of the schema, as it writes them, searched for as its validator searches them.
 # A pattern that must end at the end says so with `(?![\s\S])`, which means the same in Python
 # and in the dialect JSON Schema names. `$` does not: in Python it also holds before a final
@@ -37,6 +63,10 @@ TS_SHAPE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?
 SITE_SHAPE = re.compile(r"^(?!www\.)[a-z0-9._-]+(?![\s\S])")
 PATH_SHAPE = re.compile(r"^/")
 TARGET_SHAPE = re.compile(r"^[0-9a-f]{8}(?![\s\S])")
+# A tag is in lower case and starts with a letter. A custom element's name always holds a
+# hyphen, and a click often lands on one, so a hyphen, a dot and an underscore may follow.
+TAG_SHAPE = re.compile(r"^[a-z][a-z0-9._-]*(?![\s\S])")
+FINGERPRINT_AT_MOST = 200
 
 # How the logger writes the second that ts holds.
 TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
@@ -63,8 +93,37 @@ def _is_one(value: object) -> bool:
 
 
 @dataclass(frozen=True)
+class Action:
+    """What was done in a page: the element's tag, how it is told apart, and a field's kind.
+
+    type is the kind of the event. field is the kind of the field an input was typed into,
+    and None for every other action. Nothing here says what a field held.
+    """
+
+    type: str
+    tag: str
+    fingerprint: str
+    field: str | None
+
+    def as_dict(self) -> dict[str, object]:
+        """The JSON object of the action, in the schema's order, without a field it has none
+        of."""
+        data: dict[str, object] = {
+            "type": self.type,
+            "tag": self.tag,
+            "fingerprint": self.fingerprint,
+        }
+        if self.field is not None:
+            data["field"] = self.field
+        return data
+
+
+@dataclass(frozen=True)
 class Event:
-    """One thing a person did in their browser: a site, a path, a kind, a tab and a second."""
+    """One thing a person did in their browser: a site, a path, a kind, a tab and a second.
+
+    action is there when a listener in the page reported what was done, and None otherwise.
+    """
 
     v: int
     ts: str
@@ -72,10 +131,12 @@ class Event:
     site: str
     path: str
     target: str | None
+    action: Action | None = None
 
     def as_dict(self) -> dict[str, object]:
-        """The JSON object of the event, with its six fields in the schema's order."""
-        return {
+        """The JSON object of the event, with its six fields in the schema's order, and the
+        action as the seventh when there is one."""
+        data: dict[str, object] = {
             "v": self.v,
             "ts": self.ts,
             "kind": self.kind,
@@ -83,6 +144,9 @@ class Event:
             "path": self.path,
             "target": self.target,
         }
+        if self.action is not None:
+            data["action"] = self.action.as_dict()
+        return data
 
     @classmethod
     def parse(cls, data: object) -> "Event":
@@ -91,7 +155,7 @@ class Event:
         # reader and that schema in agreement.
         if not (
             isinstance(data, dict)
-            and set(data) == {"v", "ts", "kind", "site", "path", "target"}
+            and EVENT_FIELDS <= set(data) <= EVENT_FIELDS | {"action"}
             and _is_one(data["v"])
             and _matches(TS_SHAPE, data["ts"])
             and data["kind"] in KINDS
@@ -100,7 +164,40 @@ class Event:
             and (data["target"] is None or _matches(TARGET_SHAPE, data["target"]))
         ):
             raise ValueError("the activity event has an unexpected shape")
-        return cls(1, data["ts"], data["kind"], data["site"], data["path"], data["target"])
+        # An action is read against the kind of its event, which is where the schema's rules
+        # tie the two.
+        action = None if "action" not in data else _action_in(data["action"], data["kind"])
+        if "action" in data and action is None:
+            raise ValueError("the activity event has an unexpected shape")
+        return cls(1, data["ts"], data["kind"], data["site"], data["path"], data["target"], action)
+
+
+def _action_in(data: object, kind: str) -> Action | None:
+    """The action in data for an event of this kind, or None when the schema would refuse it.
+
+    An action names one of the four kinds that happen in a page, and names the kind of its
+    event. Only an input has a field, and an input must have one.
+    """
+    if not (
+        isinstance(data, dict)
+        and set(ACTION_REQUIRED) <= set(data) <= set(ACTION_REQUIRED) | {"field"}
+    ):
+        return None
+    field = data.get("field")
+    if not (
+        kind in ACTION_TYPES
+        and data["type"] == kind
+        and _matches(TAG_SHAPE, data["tag"])
+        and isinstance(data["fingerprint"], str)
+        and 1 <= len(data["fingerprint"]) <= FINGERPRINT_AT_MOST
+        and (
+            field in FIELD_KINDS
+            if kind == "input"
+            else "field" not in data  # a field that is null is a field, and no kind
+        )
+    ):
+        return None
+    return Action(data["type"], data["tag"], data["fingerprint"], field)
 
 
 # --------------------------------------------------------------- the record ---

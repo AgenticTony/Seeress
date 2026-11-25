@@ -178,6 +178,50 @@ def test_a_focus_line_becomes_a_focus_event_with_no_tab(tmp_path: Path) -> None:
     ]
 
 
+def test_an_event_made_from_a_line_of_the_logger_has_no_action(tmp_path: Path) -> None:
+    """Nothing the spike logger wrote says what was done in the page."""
+    write(tmp_path, FILE, tab_line("nav", "https://example.org/invoices/7"))
+
+    (event,) = activity.read_events(tmp_path)
+
+    assert event.action is None
+    assert list(event.as_dict()) == ["v", "ts", "kind", "site", "path", "target"]
+
+
+def test_an_action_is_kept_through_the_event() -> None:
+    """An event made with an action is read back as the same event, with a field or without."""
+    typed = activity.Event(
+        1,
+        TS,
+        "input",
+        "example.org",
+        "/search",
+        "1a2b3c4d",
+        activity.Action("input", "input", 'input[name="q"]', "password"),
+    )
+    clicked = activity.Event(
+        1,
+        TS,
+        "click",
+        "example.org",
+        "/search",
+        "1a2b3c4d",
+        activity.Action("click", "button", "button:nth-child(2)", None),
+    )
+
+    assert activity.Event.parse(typed.as_dict()) == typed
+    assert activity.Event.parse(clicked.as_dict()) == clicked
+    assert typed.action is not None
+    assert typed.action.as_dict() == {
+        "type": "input",
+        "tag": "input",
+        "fingerprint": 'input[name="q"]',
+        "field": "password",
+    }
+    assert clicked.action is not None
+    assert "field" not in clicked.action.as_dict()
+
+
 @pytest.mark.parametrize(
     "line",
     [
