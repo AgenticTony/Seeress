@@ -6,6 +6,7 @@ ignored setting could be the one that keeps client pages away from a cloud model
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -282,6 +283,14 @@ def test_a_settings_file_without_the_capture_section_has_the_defaults(home: Path
         pytest.param("[capture]\nfrom = 8\n", "'from'", id="a start as a number"),
         pytest.param('[capture]\nto = "07:00"\n', "'to'", id="an overnight schedule"),
         pytest.param('[capture]\nto = "08:00"\n', "'to'", id="a schedule with no time in it"),
+        # Refused as an hour that is none, and not because the default end would come before
+        # it: so the message says.
+        pytest.param(
+            '[capture]\nfrom = "24:00"\n',
+            "'from' must be a whole hour written HH:00",
+            id="a start at midnight",
+        ),
+        pytest.param('[capture]\nto = "24:30"\n', "'to'", id="an end with minutes past midnight"),
         pytest.param("[capture]\nkeep_days = 0\n", "'keep_days'", id="nothing kept"),
         pytest.param('[capture]\nkeep_days = "30"\n', "'keep_days'", id="days as a text"),
         pytest.param("[capture]\nkeep_days = 2.5\n", "'keep_days'", id="days with a fraction"),
@@ -307,3 +316,15 @@ def test_a_capture_setting_that_is_no_table_is_refused(home: Path) -> None:
 
     with pytest.raises(ConfigError, match="'capture' must be a table"):
         config.load_settings()
+
+
+def test_a_schedule_may_end_at_midnight(home: Path) -> None:
+    """The latest end taken was "23:00", and that made 22 the last hour: the last hour of the
+    day could never be captured. "24:00" is where a schedule ends, and no hour begins there."""
+    settings_file(home, '[capture]\nfrom = "22:00"\nto = "24:00"\n')
+
+    schedule = config.load_settings().capture.schedule
+
+    assert (schedule.start, schedule.end) == (22, 23)
+    late = time.mktime((2026, 11, 20, 23, 30, 0, 0, 0, -1))  # a Friday, half past eleven
+    assert activity.due(late, schedule)

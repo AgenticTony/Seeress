@@ -1260,7 +1260,7 @@ def test_python_m_seeress_capture_is_the_logger(
     own, address = browser
     (home / "config.toml").write_text(
         '[capture]\ndays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]\n'
-        'from = "00:00"\nto = "23:00"\n',
+        'from = "00:00"\nto = "24:00"\n',
         encoding="utf-8",
     )
     tab = own.tab(f"{site}/")

@@ -232,7 +232,7 @@ def _capture(raw: Mapping[str, object], path: Path) -> CaptureSettings:
             "mon, tue, wed, thu, fri, sat or sun, in lower case."
         )
     start = _hour(raw.get("from", "08:00"), "from", path)
-    stop = _hour(raw.get("to", "18:00"), "to", path)
+    stop = _hour(raw.get("to", "18:00"), "to", path, midnight=True)
     if stop <= start:
         raise ConfigError(
             f"{path}: 'to' must be after 'from'. A schedule that runs past midnight is not taken."
@@ -247,8 +247,15 @@ def _are_days(days: list[object]) -> bool:
     return bool(days) and all(isinstance(day, str) and day in DAYS for day in days)
 
 
-def _hour(value: object, key: str, path: Path) -> int:
-    """A whole hour written HH:00, as its number."""
+def _hour(value: object, key: str, path: Path, *, midnight: bool = False) -> int:
+    """A whole hour written HH:00, as its number.
+
+    With midnight, "24:00" is taken too, as 24: it is where a schedule ends, and no hour
+    begins there. Before it was refused, the latest end was "23:00", and that made 22 the
+    last hour: the last hour of the day could never be captured.
+    """
+    if midnight and value == "24:00":
+        return 24
     if not isinstance(value, str) or (found := _HOUR.fullmatch(value)) is None:
         raise ConfigError(f'{path}: {key!r} must be a whole hour written HH:00, as "08:00".')
     return int(found.group(1))
