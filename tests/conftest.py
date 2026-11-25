@@ -1,7 +1,7 @@
 """Shared fixtures.
 
-Every test runs against a throwaway home directory, without cloud keys, and (unless it is
-marked `e2e` or `git`) without the ability to start a process or open a connection. A unit
+Every test runs in a throwaway home directory of its own, without cloud keys, and (unless it
+is marked `e2e` or `git`) without the ability to start a process or open a connection. A unit
 test that tries either fails at once and names itself, instead of reaching the real browser
 tool. A test marked `git` may start git and nothing else.
 """
@@ -35,29 +35,36 @@ class OutsideWorldError(RuntimeError):
 
 
 @pytest.fixture(autouse=True)
-def seeress_home_of_its_own(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """No test ever writes into the real Seeress home, asked for or not.
+def seeress_home_of_its_own(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Path]:
+    """No test ever writes into the real home, asked for or not.
 
-    An empty folder was once left in the real one by a test that did not ask for the
-    fake home. Every test now gets a short throwaway home of its own. The path is short
-    because the browser tool's daemon listens on a Unix socket under the Seeress home,
-    and the operating system caps that socket's length.
+    Every test gets a short throwaway home of its own, and SEERESS_HOME, HOME and
+    Path.home() all name it. The path is short because the browser tool's daemon listens on
+    a Unix socket under the Seeress home, and the operating system caps that socket's length.
+
+    Two tests once reached the real home because this was asked for. One left an empty
+    folder in the real Seeress home. The other rewrote the LaunchAgent file of the activity
+    logger: it ran `watcher.start()`, which built the path from Path.home(). A test marked
+    `e2e` keeps the HOME it was given: it starts a real browser through the browser tool,
+    which has not yet been run from a throwaway HOME.
     """
     root = Path(tempfile.mkdtemp(prefix="sr-home-", dir=SHORT_TMP)).resolve()
     fake = root / "home"
     fake.mkdir()
     monkeypatch.setenv("SEERESS_HOME", str(fake / ".seeress"))
+    if request.node.get_closest_marker("e2e") is None:
+        monkeypatch.setenv("HOME", str(fake))
+        monkeypatch.setattr(Path, "home", lambda: fake)
     yield fake
     shutil.rmtree(root, ignore_errors=True)
 
 
 @pytest.fixture
-def home(seeress_home_of_its_own: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point HOME and Path.home() at the throwaway home too, for code that reads them."""
-    fake = seeress_home_of_its_own
-    monkeypatch.setenv("HOME", str(fake))
-    monkeypatch.setattr(Path, "home", lambda: fake)
-    return fake
+def home(seeress_home_of_its_own: Path) -> Path:
+    """The throwaway home of the test, for a test that says it runs code reading the home."""
+    return seeress_home_of_its_own
 
 
 @pytest.fixture

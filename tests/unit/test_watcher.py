@@ -182,7 +182,12 @@ def test_start_writes_the_agent_and_loads_it(
     assert answer.startswith("watcher running (LaunchAgent ai.seeress.spike-watch")
 
 
-def test_a_failed_load_is_reported(watch_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_failed_load_is_reported(
+    home: Path, watch_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The home is asked for, though every test has one: this test runs `start()`, which
+    writes a file under it. Once it did not, and rewrote the real logger's LaunchAgent file."""
+
     class Failed:
         returncode = 1
         stderr = "service already loaded"
