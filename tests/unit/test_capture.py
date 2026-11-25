@@ -16,12 +16,15 @@ import os
 import re
 import stat
 import sys
+import threading
 import time
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
+from websockets.exceptions import WebSocketException
 
 from seeress import activity, capture
 from seeress.errors import CaptureError
@@ -201,6 +204,7 @@ def test_a_tab_is_named_by_eight_characters_and_the_second_is_the_one_given() ->
         pytest.param(".innerText", id="the text an element shows"),
         pytest.param(".placeholder", id="the hint of a field"),
         pytest.param(".selectedIndex", id="the choice of a select"),
+        pytest.param(".title", id="the title of an element, which is prose"),
     ],
 )
 def test_the_listener_reads_no_property_that_holds_what_a_person_wrote(
@@ -633,6 +637,17 @@ def test_a_browser_that_names_no_default_context_is_captured_from_no_more() -> N
 
     with pytest.raises(CaptureError, match="default"):
         sessions.hears(answer(contexts_id, {"browserContextIds": []}), WHEN)
+
+
+def test_a_tab_that_names_no_context_is_not_the_browser_s_own_once_it_names_one() -> None:
+    """Every tab that is not in a private window names the default context. One that names
+    none cannot be said to be in it, and is not attached."""
+    held = Held()
+    about = info()
+    del about["browserContextId"]
+
+    assert held.hears(created(about)) == []
+    assert held.methods() == OPENING
 
 
 def test_an_event_is_written_when_the_listener_of_a_tab_reports() -> None:
@@ -1512,3 +1527,97 @@ def test_the_listener_puts_itself_back_when_the_document_is_opened_again() -> No
 
     assert watches in capture.LISTENER
     assert capture.LISTENER.count("window.addEventListener(type, handler, true);") == 2
+
+
+class Standing:
+    """A stand-in for the browser's connection. It lets the capture in, keeps what it is
+    sent, and never says a word. refused makes it refuse the next connection instead."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.let_in = threading.Event()
+        self.refused: BaseException | None = None
+
+    def __call__(self, address: str, **options: object) -> "Standing":
+        return self
+
+    async def __aenter__(self) -> "Standing":
+        if self.refused is not None:
+            raise self.refused
+        self.let_in.set()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def send(self, text: str) -> None:
+        self.sent.append(text)
+
+    async def recv(self) -> None:
+        await asyncio.Event().wait()  # a word that never comes
+
+
+def awaited(condition: Callable[[], object], seconds: float = 10.0) -> object:
+    """Wait, on the test's own thread, for condition to come back with something."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        found = condition()
+        if found:
+            return found
+        time.sleep(0.01)
+    raise AssertionError(f"waited {seconds:g} s, and did not get what was waited for")
+
+
+def test_an_error_of_the_connection_that_ends_the_capture_is_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A browser that goes away says so in the library's own error. It is kept as any other
+    is, and nothing is raised on the thread."""
+    standing = Standing()
+    standing.refused = WebSocketException("the browser went away")
+    monkeypatch.setattr(capture, "connect", standing)
+    recorder = capture.Recorder("ws://127.0.0.1:9/devtools/browser/none", lambda event: None)
+    recorder.start()
+    try:
+        awaited(lambda: recorder.error)
+    finally:
+        recorder.stop()
+
+    assert isinstance(recorder.error, WebSocketException)
+
+
+def test_a_recorder_that_failed_once_shows_no_error_while_it_runs_well_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An error is the end of a run. A run that goes on after it has none to show, until it
+    ends with one."""
+    standing = Standing()
+    standing.refused = OSError("nothing listens on 9")
+    monkeypatch.setattr(capture, "connect", standing)
+    recorder = capture.Recorder("ws://127.0.0.1:9/devtools/browser/none", lambda event: None)
+    recorder.start()
+    try:
+        awaited(lambda: recorder.error)
+    finally:
+        recorder.stop()
+
+    standing.refused = None
+    recorder.start()
+    try:
+        awaited(standing.let_in.is_set)
+        assert standing.sent == [  # once: a second start starts nothing more
+            '{"id": 1, "method": "Target.setDiscoverTargets", "params": {"discover": true}}',
+            '{"id": 2, "method": "Target.getBrowserContexts", "params": {}}',
+            '{"id": 3, "method": "Target.getTargets", "params": {}}',
+            '{"id": 4, "method": "Storage.getCookies", "params": {}}',
+        ]
+        assert recorder.running
+        assert recorder.error is None
+        recorder.start()  # a second start starts nothing more
+        time.sleep(0.1)  # long enough for a second connection to say its first words
+        assert len(standing.sent) == 4
+    finally:
+        recorder.stop()
+
+    assert recorder.error is None
+    assert recorder.running is False

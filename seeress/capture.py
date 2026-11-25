@@ -1019,8 +1019,11 @@ class Recorder:
         return self._error
 
     def start(self) -> None:
+        """Run the capture. An error kept from a run before is not shown any more: a run
+        that goes on has none to show, until it ends with one."""
         if self.running:
             return
+        self._error = None
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._listen, name="seeress-capture", daemon=True)
         self._thread.start()

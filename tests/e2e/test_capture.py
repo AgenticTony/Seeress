@@ -1122,3 +1122,28 @@ def test_the_capture_hears_again_after_a_page_opens_its_document_again(
     assert [event.action for event in (one, two)] == [
         activity.Action("click", "button", 'button[data-testid="save"]', None)
     ] * 2
+
+
+def test_an_element_that_has_an_id_and_a_test_id_is_named_by_its_test_id(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """Of the attributes that may name an element, the first that is there names it, always
+    in the same order: a test id, then an id, then a name."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        tab.run(
+            "(() => { const b = document.createElement('button'); b.id = 'the-one';"
+            " b.setAttribute('data-testid', 'the-test'); document.body.appendChild(b); })()"
+        )
+        tab.click("#the-one")
+        (event,) = until(lambda: recording.of_kind("click"), "a click on the element", 10)
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert event.action == activity.Action(
+        "click", "button", 'button[data-testid="the-test"]', None
+    )
