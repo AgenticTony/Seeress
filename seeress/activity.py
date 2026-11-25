@@ -15,8 +15,9 @@ of the record into events, and skips every line that holds none. read_outages an
 read_agent_runs read the same record for the times at which it holds nothing of a person's:
 when the logger could not reach the browser, and when an agent was driving it.
 
-Seeress writes to the record for those two times alone: a note of every run of the browser
-tool, which is a run of the agent's, and a note of how every run of a saved flow ended.
+Seeress writes to the record for three things. write_event writes the events that a listener
+in the page reports, which are events from the start. A note is written of every run of the
+browser tool, which is a run of the agent's, and of how every run of a saved flow ended.
 """
 
 import json
@@ -241,13 +242,14 @@ def read_events(home: Path, hours: float | None = None, *, now: float | None = N
 
     home is the Seeress home. The record is read file by file in file-name order, and the
     events come back in time order. Events that share a second keep the order of the files
-    and of the lines. With hours, only the events of the last hours are returned, up to now
+    and of the lines. The files are the spike logger's and the capture's: spike-*.jsonl and
+    activity-*.jsonl. With hours, only the events of the last hours are returned, up to now
     or, when now is not given, up to the clock. Each ts is read as the machine's local time.
     Nothing is written.
     """
     cutoff = _cutoff(hours, now)
     events: list[Event] = []
-    for data in _lines(home):
+    for data in _lines(home, "activity-*.jsonl", "spike-*.jsonl"):
         event = _event_in(data)
         if event is None or (cutoff is not None and not _is_since(event.ts, cutoff)):
             continue
@@ -332,14 +334,21 @@ def _cutoff(hours: float | None, now: float | None) -> float | None:
     return (time.time() if now is None else now) - hours * 3600
 
 
-def _lines(home: Path) -> Iterator[dict[str, Any]]:
+def _lines(home: Path, *patterns: str) -> Iterator[dict[str, Any]]:
     """Every line of the record under home that is an object in JSON, file by file in
     file-name order and in line order. A line that is neither is skipped.
 
-    A file is named for the day the logger started, not for the day of its lines. So a file
-    is never read as a day.
+    The files are those whose names match a pattern. With no pattern they are the spike
+    logger's, whose lines alone say when the logger could not reach the browser. A file of
+    the logger is named for the day the logger started, and a file of the capture for the day
+    of its lines. Either way no file is read as a day: the ts of every line says when.
     """
-    for path in sorted((home / "watch").glob("spike-*.jsonl")):
+    files = [
+        path
+        for pattern in patterns or ("spike-*.jsonl",)
+        for path in (home / "watch").glob(pattern)
+    ]
+    for path in sorted(files):
         for line in path.read_bytes().splitlines():
             data = _object(line)
             if data is not None:
@@ -430,6 +439,27 @@ def clock(when: float) -> str:
 
 
 # --------------------------------------------------------- writing the record ---
+
+
+def write_event(home: Path, event: Event, *, now: float | None = None) -> Path:
+    """Append one activity event to the record under home, for the user alone.
+
+    The file is home/watch/activity-YYYYMMDD.jsonl, named for the day the event is written,
+    which is today when now is not given. It is never named for the day of the event's ts: an
+    event written at midnight goes to the new day's file. The folder is made when it is
+    missing, for the user alone, and so is the file. One line of JSON per event, and nothing
+    else. Returns the file.
+
+    Raises OSError when the line cannot be written. A capture that cannot write ends with the
+    error and says so, rather than going on and recording nothing.
+    """
+    when = time.time() if now is None else now
+    path = home / "watch" / f"activity-{time.strftime('%Y%m%d', time.localtime(when))}.jsonl"
+    path.parent.mkdir(mode=PRIVATE, parents=True, exist_ok=True)
+    opened = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, PRIVATE_FILE)
+    with os.fdopen(opened, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(event.as_dict(), ensure_ascii=False) + "\n")
+    return path
 
 
 def note(home: Path, file: str, fields: Mapping[str, object]) -> None:

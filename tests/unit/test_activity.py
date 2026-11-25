@@ -496,6 +496,7 @@ def test_the_log_files_are_exactly_as_they_were(tmp_path: Path) -> None:
         "this line is not JSON",
         focus_line("https://example.org/inbox"),
     )
+    activity.write_event(tmp_path, click(), now=WRITTEN_AT)
     before = files_under(tmp_path)
 
     activity.read_events(tmp_path)
@@ -876,3 +877,161 @@ def test_a_line_of_the_flow_runs_that_does_not_read_is_skipped(tmp_path: Path, l
     write(tmp_path, FLOW_RUNS, line, {"ts": TS, "name": "alpha", "exit": 0})
 
     assert activity.read_flow_runs(tmp_path) == [activity.FlowRun(TS, "alpha", 0, None)]
+
+
+# --------------------------------------------------------- what the capture writes ---
+
+
+def click(ts: str = "2026-11-20T09:15:05") -> activity.Event:
+    """An event as the capture makes one: what a person did in a page."""
+    return activity.Event(
+        1,
+        ts,
+        "click",
+        "example.org",
+        "/invoices/7",
+        "1a2b3c4d",
+        activity.Action("click", "button", 'button[data-testid="save"]', None),
+    )
+
+
+def moment(local_time: str) -> float:
+    """A moment of this machine's local time, in seconds since the epoch."""
+    return time.mktime(time.strptime(local_time, "%Y-%m-%dT%H:%M:%S"))
+
+
+WRITTEN_AT = moment("2026-11-25T10:30:00")
+
+
+def test_an_event_is_written_as_one_line_of_json(tmp_path: Path) -> None:
+    event = click()
+
+    path = activity.write_event(tmp_path, event, now=WRITTEN_AT)
+
+    assert path == tmp_path / "watch" / "activity-20261125.jsonl"
+    assert path.read_bytes() == (json.dumps(event.as_dict(), ensure_ascii=False) + "\n").encode()
+
+
+def test_a_file_is_named_for_the_day_its_event_is_written(tmp_path: Path) -> None:
+    """And never for the day of the event. An event written at midnight goes to the new day's
+    file."""
+    before_midnight = moment("2026-11-25T23:59:59")
+
+    late = activity.write_event(tmp_path, click(), now=before_midnight)
+    after = activity.write_event(tmp_path, click("2026-11-26T00:00:00"), now=before_midnight + 1)
+
+    assert late.name == "activity-20261125.jsonl"
+    assert after.name == "activity-20261126.jsonl"
+
+
+def test_a_file_is_named_for_today_when_no_moment_is_given(tmp_path: Path) -> None:
+    path = activity.write_event(tmp_path, click())
+
+    assert path.name == f"activity-{time.strftime('%Y%m%d')}.jsonl"
+
+
+def test_each_event_is_one_more_line(tmp_path: Path) -> None:
+    first, second = click(), click("2026-11-20T09:15:06")
+    activity.write_event(tmp_path, first, now=WRITTEN_AT)
+
+    path = activity.write_event(tmp_path, second, now=WRITTEN_AT)
+
+    assert path.read_text(encoding="utf-8").splitlines() == [
+        json.dumps(first.as_dict(), ensure_ascii=False),
+        json.dumps(second.as_dict(), ensure_ascii=False),
+    ]
+
+
+def test_an_event_is_read_back_as_it_was_written(tmp_path: Path) -> None:
+    """Through its file, and with a fingerprint outside ASCII."""
+    event = activity.Event(
+        1,
+        "2026-11-20T09:15:05",
+        "input",
+        "example.org",
+        "/search",
+        "1a2b3c4d",
+        activity.Action("input", "input", 'input[aria-label="Sök"]', "search"),
+    )
+    activity.write_event(tmp_path, event, now=WRITTEN_AT)
+
+    assert activity.read_events(tmp_path) == [event]
+
+
+def test_nothing_is_written_but_the_event(tmp_path: Path) -> None:
+    """One file under the home, and it holds the event and nothing else."""
+    event = click()
+
+    activity.write_event(tmp_path, event, now=WRITTEN_AT)
+
+    files = [str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*") if path.is_file()]
+    assert files == ["watch/activity-20261125.jsonl"]
+    assert (tmp_path / files[0]).read_text(encoding="utf-8") == (
+        json.dumps(event.as_dict(), ensure_ascii=False) + "\n"
+    )
+
+
+def test_an_event_is_for_the_user_alone(tmp_path: Path) -> None:
+    path = activity.write_event(tmp_path, click(), now=WRITTEN_AT)
+
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_a_line_that_cannot_be_written_is_raised(tmp_path: Path) -> None:
+    """The capture that calls it ends with the error, rather than going on and recording
+    nothing."""
+    (tmp_path / "watch").write_text("a file where the folder should be", encoding="utf-8")
+
+    with pytest.raises(OSError):
+        activity.write_event(tmp_path, click(), now=WRITTEN_AT)
+
+
+def test_the_capture_s_files_are_read_beside_the_logger_s(tmp_path: Path) -> None:
+    write(tmp_path, "spike-20261120.jsonl", nav("example.org", ts="2026-11-20T09:15:02"))
+    activity.write_event(tmp_path, click("2026-11-20T09:15:03"), now=WRITTEN_AT)
+    write(tmp_path, "spike-20261121.jsonl", nav("other.example", ts="2026-11-20T09:15:04"))
+
+    events = activity.read_events(tmp_path)
+
+    assert events == [
+        navigate("example.org", "2026-11-20T09:15:02"),
+        click("2026-11-20T09:15:03"),
+        navigate("other.example", "2026-11-20T09:15:04"),
+    ]
+
+
+def test_events_that_share_a_second_keep_the_order_of_the_files(tmp_path: Path) -> None:
+    """A file of the capture comes before a file of the logger, whichever was written first."""
+    write(tmp_path, "spike-20261120.jsonl", nav("logger.example", ts="2026-11-20T09:15:03"))
+    activity.write_event(tmp_path, click("2026-11-20T09:15:03"), now=WRITTEN_AT)
+
+    events = activity.read_events(tmp_path)
+
+    assert [event.kind for event in events] == ["click", "navigate"]
+
+
+def test_no_file_of_the_record_but_the_two_kinds_is_read(tmp_path: Path) -> None:
+    """Whatever a line of another file holds, it is no event."""
+    for name in ("agent-runs.jsonl", "flow-runs.jsonl", "activity-20261120.jsonl.bak"):
+        write(tmp_path, name, nav("example.org"), {**click().as_dict()})
+
+    assert activity.read_events(tmp_path) == []
+
+
+def test_only_the_logger_s_own_files_say_when_it_could_not_reach_the_browser(
+    tmp_path: Path,
+) -> None:
+    """An event of the capture's, a note of a flow's run, or a file of any other name, ends no
+    outage, whatever its ts. timeline.jsonl is invented: it sorts after the logger's files,
+    where a line with a later ts could move the end of an outage that never ended."""
+    write(
+        tmp_path, "spike-20261120.jsonl", down("2026-11-20T09:15:00"), down("2026-11-20T09:15:05")
+    )
+    write(tmp_path, "flow-runs.jsonl", {"ts": "2026-11-20T09:15:40", "name": "alpha", "exit": 0})
+    write(tmp_path, "timeline.jsonl", nav("example.org", ts="2026-11-20T09:15:45"))
+    activity.write_event(tmp_path, click("2026-11-20T09:15:50"), now=WRITTEN_AT)
+
+    assert activity.read_outages(tmp_path) == [
+        between("2026-11-20T09:15:00", "2026-11-20T09:15:05")
+    ]
