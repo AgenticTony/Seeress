@@ -5,28 +5,13 @@ the reader refuses. A schema that drifts from its reader is a contract nobody ca
 """
 
 import json
-from pathlib import Path
 from typing import Any
 
-import jsonschema
 import pytest
 
 from seeress import activity, bodies
 
-CONTRACTS = Path(__file__).resolve().parents[2] / "contracts"
-
-
-def schema(name: str) -> dict[str, Any]:
-    document: dict[str, Any] = json.loads((CONTRACTS / name).read_text(encoding="utf-8"))
-    jsonschema.Draft202012Validator.check_schema(document)
-    return document
-
-
-def accepted(document: dict[str, Any], instance: object) -> bool:
-    return bool(jsonschema.Draft202012Validator(document).is_valid(instance))
-
-
-# ------------------------------------------------------- browser body probe ---
+from .schemas import accepted, schema
 
 PROBE = schema("browser-body-probe.schema.json")
 

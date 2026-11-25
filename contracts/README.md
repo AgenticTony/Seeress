@@ -49,11 +49,11 @@ a full URL. What may reach a model is the site, the path, the hour and counts.
 
 ### Flow
 
-What the compiler is given. It is written from a proposal the user has approved, and read by
-`Flow.parse` in `seeress/proposals.py`. It is a name, a goal and one to fifty sites in the
-order the task visits them. Once someone has written what is done on each site, it has a step
-per site that says so. Nothing else of the activity record goes into it: no path, no count,
-no time.
+What the compiler is given. A command of Seeress writes it, from a proposal the user has
+approved, and `Flow.parse` in `seeress/proposals.py` reads it. It is a name, a goal and one
+to fifty sites in the order the task visits them. Once someone has written what is done on
+each site, it has a step per site whose `intent` says so in a person's words. Nothing else
+of the activity record goes into it: no path, no count, no time.
 
 ### Flow proposal
 
@@ -64,7 +64,13 @@ evidence is counted, and never written by a model.
 
 Two fields are not counted. The goal is a model's one sentence on what the task may be, until
 the user writes the goal in their own words, which approves the proposal. The confidence is
-the model's, from 1 to 5, or null when no model was asked.
+the model's, from 1 to 5, or null when no model was asked or when its sentence was not kept.
 
-A proposal carries sites, an hour, days and counts. It never carries a path, a page title,
-typed text, a query, a fragment or a full URL.
+Two fields say what kind of proposal it is. `order` is `fixed` when the sites recur in this
+order, and `varies` when they recur as a set, in any order, most often seen first. `status`
+is where it stands: `proposed`, `approved` by the user, `compiled` into a flow, or
+`dismissed` by the user.
+
+The free text a proposal carries is the sentence of its goal and, once a person has written
+them, the intents of its steps. Otherwise it carries sites, an hour, days and counts. It
+never carries a path, a page title, typed text, a query, a fragment or a full URL.

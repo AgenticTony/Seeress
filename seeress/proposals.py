@@ -32,9 +32,10 @@ TIME_SHAPE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}
 ORDERS: tuple[str, ...] = ("fixed", "varies")
 STATUSES: tuple[str, ...] = ("proposed", "approved", "compiled", "dismissed")
 
-# The most a field holds, as the schemas say.
+# The most a field holds, as the schemas say. Each is a number of its own there.
 GOAL_AT_MOST = 1000
 SITES_AT_MOST = 50
+STEPS_AT_MOST = 50
 INTENT_AT_MOST = 200
 DAYS_AT_MOST = 366
 
@@ -50,7 +51,9 @@ PROPOSAL_FIELDS = FLOW_FIELDS | {
     "status",
 }
 STEP_FIELDS = frozenset({"site", "intent"})
-STEPS = frozenset({"steps"})
+
+# The one field of a flow, and of a proposal, that may be left out.
+OPTIONAL = frozenset({"steps"})
 
 
 @dataclass(frozen=True)
@@ -113,7 +116,7 @@ def _sites(value: object) -> tuple[str, ...] | None:
 
 def _steps(value: object) -> tuple[Step, ...] | None:
     """The steps of a flow or a proposal, or None when the schema would refuse them."""
-    if not isinstance(value, list) or not 1 <= len(value) <= SITES_AT_MOST:
+    if not isinstance(value, list) or not 1 <= len(value) <= STEPS_AT_MOST:
         return None
     steps: list[Step] = []
     for step in value:
@@ -127,13 +130,13 @@ def _steps(value: object) -> tuple[Step, ...] | None:
 
 
 def _sessions(value: object) -> dict[str, int] | None:
-    """How many sessions a pattern was seen in on each day, the days in order, or None when
-    the schema would refuse them."""
+    """How many sessions a pattern was seen in on each day, or None when the schema would
+    refuse them. The days come as they were written; as_dict writes them in order."""
     if not isinstance(value, dict) or not 1 <= len(value) <= DAYS_AT_MOST:
         return None
     if not all(_matches(DAY_SHAPE, day) and _integer(count, 1) for day, count in value.items()):
         return None
-    return {day: int(value[day]) for day in sorted(value)}
+    return {day: int(count) for day, count in value.items()}
 
 
 def _read_flow_fields(
@@ -180,7 +183,7 @@ class Flow:
         """The flow in data. Raises ValueError when the schema would refuse data."""
         # The shape is contracts/flow.schema.json; a contract test keeps this reader and that
         # schema in agreement.
-        fields = _fields(data, FLOW_FIELDS, STEPS)
+        fields = _fields(data, FLOW_FIELDS, OPTIONAL)
         read = None if fields is None else _read_flow_fields(fields, 1)
         if fields is None or read is None:
             raise ValueError("the flow has an unexpected shape")
@@ -233,7 +236,7 @@ class Proposal:
         """The proposal in data. Raises ValueError when the schema would refuse data."""
         # The shape is contracts/flow-proposal.schema.json; a contract test keeps this reader
         # and that schema in agreement.
-        fields = _fields(data, PROPOSAL_FIELDS, STEPS)
+        fields = _fields(data, PROPOSAL_FIELDS, OPTIONAL)
         read = None if fields is None else _read_flow_fields(fields, 0)
         if fields is None or read is None:
             raise ValueError("the proposal has an unexpected shape")
@@ -263,7 +266,7 @@ class Proposal:
             first_seen,
             last_seen,
             int(hour),
-            confidence,
+            None if confidence is None else int(confidence),
             status,
             steps,
         )
