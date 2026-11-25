@@ -5,8 +5,9 @@ Local brains. Your browser. No credits, no cloud, no telemetry.
 **Status: a working prototype with foundations under it. Not production grade.** The
 agent loop, flows and the activity logger work. Under them: a lock file, 522 unit and
 contract tests, 7 tests on a real browser, strict types, lint, three import contracts and
-a CI workflow. They pass on the machine this was built on (macOS, arm64). The
-repository's Actions page says whether they pass in CI.
+a CI workflow. They pass on the machine this was built on (macOS, arm64) and in CI on
+GitHub's macOS runner; the first green run is
+[45566464574](https://github.com/AgenticTony/Seeress/actions/runs/45566464574).
 
 **Not verified.** The personal door's acceptance was last proven on a throwaway Chromium
 that stands where your Chrome does, not on your Chrome.
