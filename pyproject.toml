@@ -14,6 +14,11 @@ dependencies = [
     "websockets==15.0.1",
 ]
 
+[project.scripts]
+# The help of the command line, and every hint it prints, name `seeress`. Installing the
+# project puts the command beside the interpreter: in `.venv/bin` after `uv sync`.
+seeress = "seeress.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest==9.2.0",

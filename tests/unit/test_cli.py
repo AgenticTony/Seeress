@@ -2,6 +2,7 @@
 
 import logging
 import signal
+import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -540,3 +541,13 @@ def test_a_signal_to_end_the_process_ends_it_cleanly(
         (signal.SIGTERM, signal.SIG_DFL),
         (signal.SIGHUP, signal.SIG_DFL),
     ]
+
+
+def test_the_command_line_is_installed_as_seeress() -> None:
+    """The help and every hint name `seeress`. Until 2026-11-25 there was no such command
+    anywhere: the only ways in were the two doors and `python -m seeress.cli`."""
+    pyproject = Path(cli.__file__).resolve().parents[1] / "pyproject.toml"
+
+    project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
+
+    assert project.get("scripts") == {"seeress": "seeress.cli:main"}
