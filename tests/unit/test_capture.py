@@ -1375,3 +1375,17 @@ def test_what_is_not_written_is_not_counted(tmp_path: Path) -> None:
         gate(clicks(1)[0])
 
     assert status.events == 0
+
+
+def test_the_listener_cuts_a_fingerprint_whole_and_where_the_record_can_hold_it() -> None:
+    """On code points, and at the length the record allows. In the page a string is counted
+    in units of sixteen bits, and an emoji is two of them: cut there, a name that ends in
+    an emoji ends in half of one, and no file can hold the line."""
+    whole = f"""
+        fingerprint: Array.from(naming(element) || place(element))
+          .slice(0, {activity.FINGERPRINT_AT_MOST})
+          .join(""),
+"""
+
+    assert whole in capture.LISTENER
+    assert capture.LISTENER.count(".slice(") == 1  # and nowhere else is anything cut

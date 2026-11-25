@@ -863,3 +863,42 @@ def test_nothing_is_kept_by_a_capture_that_cannot_connect(home: Path) -> None:
         recorder.stop()
 
     assert kept == []
+
+
+# --------------------------------------------------------- what the sixth review found ---
+
+
+def test_a_fingerprint_is_cut_whole_and_never_inside_a_character(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """A name whose two hundredth and two hundred and first units of sixteen bits are an
+    emoji: `button[data-testid="` takes twenty, and a hundred and seventy-nine letters take
+    what is left before it. Cut at two hundred in the page, the name would end in half of
+    the emoji, and no file could hold the line it was written on."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        tab.wait_loaded()
+        tab.run(
+            "(() => { const b = document.createElement('button');"
+            " b.setAttribute('data-testid', 'a'.repeat(179) + '\\u{1F600}' + 'tail');"
+            " document.body.appendChild(b); })()"
+        )
+        tab.click(f'[data-testid^="{"a" * 179}"]')
+        found = until(
+            lambda: recording.of_kind("click") or recording.recorder.error,
+            "a click on the element with the long name",
+            10,
+        )
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert recording.recorder.error is None, recording.recorder.error
+    (event,) = found
+    assert len(event.action.fingerprint) == 200
+    assert event.action.fingerprint.endswith("\U0001f600")
+    written = recording.written()
+    assert "\U0001f600" in written  # whole
+    assert not any(0xD800 <= ord(char) <= 0xDFFF for char in written)  # and no half of one
