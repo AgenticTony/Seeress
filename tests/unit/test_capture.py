@@ -1664,3 +1664,161 @@ def test_a_capture_stopped_before_the_browser_let_it_in_stops_at_once(
     assert recorder.error is None
     assert recorder.running is False
     assert slow.gave_up is False  # given up, and not waited for
+
+
+# ----------------------------------------------- what the record holds, and forgetting ---
+
+
+def written(home: Path, day: str, *kinds: str) -> Path:
+    """A file of the capture that holds one event of each kind, written on that day."""
+    when = f"{day[:4]}-{day[4:6]}-{day[6:]}T10:00:0"
+    path: Path | None = None
+    for number, kind in enumerate(kinds):
+        event = activity.Event(
+            1,
+            f"{when}{number}",
+            kind,
+            "example.org",
+            "/",
+            "1A2B3C4D",
+            activity.Action(kind, "button", "b", "text" if kind == "input" else None),
+        )
+        path = activity.write_event(home, event, now=activity.epoch(event.ts))
+    assert path is not None
+    return path
+
+
+def test_the_review_says_of_each_day_what_it_holds_oldest_first(tmp_path: Path) -> None:
+    """One line per day that is held: the day, how many events, the size of the file, and
+    how many of each kind, the most first. A last line says what the settings keep."""
+    older = written(tmp_path, "20261027", "click", "select", "click")
+    newer = written(tmp_path, "20261120", "input", "click")
+
+    said = capture.review(tmp_path, today=TODAY)
+
+    assert said == (
+        f"2026-10-27   3 events   {older.stat().st_size} bytes   click 2, select 1\n"
+        f"2026-11-20   2 events   {newer.stat().st_size} bytes   click 1, input 1\n"
+        "30 days are kept, as the settings say. Files written before 2027-03-01 will be deleted."
+    )
+
+
+def test_the_review_takes_the_days_kept_from_the_settings(tmp_path: Path) -> None:
+    (tmp_path / "config.toml").write_text("[capture]\nkeep_days = 7\n", encoding="utf-8")
+
+    said = capture.review(tmp_path, today=TODAY)
+
+    assert said == (
+        "No day is held.\n"
+        "7 days are kept, as the settings say. Files written before 2027-03-24 will be deleted."
+    )
+
+
+def test_the_review_reads_and_writes_nothing(tmp_path: Path) -> None:
+    written(tmp_path, "20261027", "click")
+    others(tmp_path / "watch")
+    before = {path: path.read_bytes() for path in (tmp_path / "watch").iterdir()}
+
+    capture.review(tmp_path, today=TODAY)
+
+    after = {path: path.read_bytes() for path in (tmp_path / "watch").iterdir()}
+    assert after == before
+
+
+def test_the_review_counts_a_line_it_cannot_read_and_no_other_file(tmp_path: Path) -> None:
+    """The spike logger's files are not the capture's, and neither is a file of eight
+    digits that are no day."""
+    kept = written(tmp_path, "20261027", "click")
+    with kept.open("a", encoding="utf-8") as stream:
+        stream.write("{not json\n")
+    others(tmp_path / "watch")
+
+    (line, last) = capture.review(tmp_path, today=TODAY).splitlines()
+
+    assert line.startswith("2026-10-27   1 event   ")
+    assert line.endswith("   click 1, unreadable 1")
+    assert last.startswith("30 days are kept")
+
+
+def test_forget_names_what_is_before_the_day_and_deletes_nothing_without_a_yes(
+    tmp_path: Path,
+) -> None:
+    old = held(tmp_path, "20261001")
+    kept = held(tmp_path, "20261015")
+
+    said = capture.forget(tmp_path, "2026-10-10")
+
+    assert said == (
+        "1 file is held from before 2026-10-10: activity-20261001.jsonl\n"
+        "--yes is needed to delete it."
+    )
+    assert old.exists() and kept.exists()
+
+
+def test_forget_with_a_yes_deletes_what_is_before_the_day_and_nothing_else(tmp_path: Path) -> None:
+    older = held(tmp_path, "20261001")
+    old = held(tmp_path, "20261009")
+    kept = held(tmp_path, "20261010")  # the day itself is kept: only what is before it goes
+    untouched = others(tmp_path / "watch")
+
+    said = capture.forget(tmp_path, "2026-10-10", yes=True)
+
+    assert said == (
+        "Deleted 2 files held from before 2026-10-10: "
+        "activity-20261001.jsonl, activity-20261009.jsonl"
+    )
+    assert not older.exists() and not old.exists()
+    assert kept.exists()
+    assert all(path.exists() for path in untouched)
+    assert sorted(path.name for path in (tmp_path / "watch").iterdir()) == sorted(
+        [kept.name, *(path.name for path in untouched)]
+    )
+
+
+def test_forget_when_nothing_is_held_from_before_the_day_says_so(tmp_path: Path) -> None:
+    held(tmp_path, "20261010")
+
+    assert (
+        capture.forget(tmp_path, "2026-10-10", yes=True)
+        == "Nothing is held from before 2026-10-10."
+    )
+
+
+@pytest.mark.parametrize(
+    "before",
+    ["2026-10-1", "10/10/2026", "20261010", "2026-13-01", "2026-02-30", "", "yesterday"],
+)
+def test_forget_refuses_a_day_that_is_no_day(tmp_path: Path, before: str) -> None:
+    held(tmp_path, "20261001")
+
+    with pytest.raises(CaptureError, match="is no day"):
+        capture.forget(tmp_path, before, yes=True)
+    assert (tmp_path / "watch" / "activity-20261001.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    ("size", "said"),
+    [
+        pytest.param(0, "0 bytes", id="nothing"),
+        pytest.param(512, "512 bytes", id="less than a kilobyte"),
+        pytest.param(1024, "1.0 kB", id="a kilobyte"),
+        pytest.param(1536, "1.5 kB", id="a kilobyte and a half"),
+        pytest.param(5 * 1024 * 1024, "5.0 MB", id="megabytes"),
+    ],
+)
+def test_the_size_of_a_file_is_written_as_a_person_reads_it(size: int, said: str) -> None:
+    assert capture._size(size) == said
+
+
+def test_with_no_home_given_the_record_is_read_in_the_seeress_home(home: Path) -> None:
+    """The commands give no home: the Seeress home is read. Of the test that is the
+    throwaway one, `.seeress` inside the home of the test, and nothing else."""
+    seeress = home / ".seeress"
+    held(seeress, "20261001")
+
+    assert capture.review().startswith("2026-10-01   1 event   ")
+    assert capture.status() == "Capture has never run here."
+    assert capture.forget(None, "2026-10-10", yes=True).startswith(
+        "Deleted 1 file held from before"
+    )
+    assert list((seeress / "watch").iterdir()) == []

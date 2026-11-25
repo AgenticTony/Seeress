@@ -32,6 +32,7 @@ import re
 import sys
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -43,7 +44,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import WebSocketException
 from websockets.typing import Data
 
-from . import activity
+from . import activity, config
 from .activity import DEFAULT_SCHEDULE, Event, Schedule, due, epoch, write_event
 from .errors import CaptureError
 
@@ -596,6 +597,28 @@ class Sessions:
 HELD = re.compile(r"activity-(\d{8})\.jsonl")
 
 
+def _held(home: Path) -> list[tuple[date, Path]]:
+    """The files of the capture with their days, the oldest day first. Only
+    activity-YYYYMMDD.jsonl in the folder of the record is looked at: no other file there is
+    the capture's to read, to name or to delete."""
+    held: list[tuple[date, Path]] = []
+    for path in sorted((home / "watch").glob("activity-*.jsonl")):
+        found = HELD.fullmatch(path.name)
+        if found is None:
+            continue
+        try:
+            written = date(int(found[1][:4]), int(found[1][4:6]), int(found[1][6:]))
+        except ValueError:  # eight digits that are no day: not the capture's to judge
+            continue
+        held.append((written, path))
+    return held
+
+
+def _before(home: Path, day: date) -> list[Path]:
+    """The files of the capture written before a day, the oldest day first."""
+    return [path for written, path in _held(home) if written < day]
+
+
 def retention(home: Path, keep_days: int, *, today: date | None = None) -> list[Path]:
     """Delete the files of the capture whose day is more than keep_days before today.
 
@@ -610,19 +633,94 @@ def retention(home: Path, keep_days: int, *, today: date | None = None) -> list[
     the error.
     """
     oldest_kept = (date.today() if today is None else today) - timedelta(days=keep_days)
-    deleted: list[Path] = []
-    for path in sorted((home / "watch").glob("activity-*.jsonl")):
-        found = HELD.fullmatch(path.name)
-        if found is None:
-            continue
-        try:
-            written = date(int(found[1][:4]), int(found[1][4:6]), int(found[1][6:]))
-        except ValueError:  # eight digits that are no day: not the capture's to judge
-            continue
-        if written < oldest_kept:
-            path.unlink()
-            deleted.append(path)
+    deleted = _before(home, oldest_kept)
+    for path in deleted:
+        path.unlink()
     return deleted
+
+
+def review(home: Path | None = None, *, today: date | None = None) -> str:
+    """What the record holds, in plain text for a person: what `seeress capture-review`
+    prints.
+
+    One line for each day that is held, the oldest first: the day, how many events, the
+    size of the file, and how many of each kind, the most first. A line that cannot be read
+    is counted, and not read. A last line says how many days the settings keep, and from
+    which day files will be deleted. It reads, and writes nothing. Raises ConfigError when
+    the settings cannot be read.
+    """
+    home = home if home is not None else config.seeress_home()
+    kept = config.load_settings(home).capture.keep_days
+    day = date.today() if today is None else today
+    lines = [_reviewed(written, path) for written, path in _held(home)] or ["No day is held."]
+    gone = (day - timedelta(days=kept)).isoformat()
+    lines.append(
+        f"{kept} days are kept, as the settings say. Files written before {gone} will be deleted."
+    )
+    return "\n".join(lines)
+
+
+def _reviewed(written: date, path: Path) -> str:
+    """One line for one day of the record."""
+    counts: Counter[str] = Counter()
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
+            try:
+                counts[activity.Event.parse(json.loads(line)).kind] += 1
+            except ValueError:  # not JSON, or not an event
+                counts["unreadable"] += 1
+    events = sum(count for kind, count in counts.items() if kind != "unreadable")
+    kinds = ", ".join(
+        f"{kind} {count}"
+        for kind, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    )
+    count = f"{events} event" + ("" if events == 1 else "s")
+    return f"{written.isoformat()}   {count}   {_size(path.stat().st_size)}   {kinds}"
+
+
+def _size(size: int) -> str:
+    """The size of a file, as a person reads it."""
+    if size < 1024:
+        return f"{size} bytes"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} kB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def forget(home: Path | None, before: str, *, yes: bool = False) -> str:
+    """Delete the record from before a day, or say what would be deleted: what
+    `seeress capture-forget` prints.
+
+    before is a day, YYYY-MM-DD. Anything else is refused. Only the files of the capture
+    are looked at, as in retention: the spike logger's files are never named, and never
+    touched. Without yes nothing is deleted.
+
+    Raises OSError when a file cannot be deleted.
+    """
+    home = home if home is not None else config.seeress_home()
+    day = _day(before)
+    gone = _before(home, day)
+    if not gone:
+        return f"Nothing is held from before {before}."
+    how_many = f"{len(gone)} file" + ("" if len(gone) == 1 else "s")
+    names = ", ".join(path.name for path in gone)
+    if not yes:
+        it = "it" if len(gone) == 1 else "them"
+        return f"{how_many} is held from before {before}: {names}\n--yes is needed to delete {it}."
+    for path in gone:
+        path.unlink()
+    return f"Deleted {how_many} held from before {before}: {names}"
+
+
+def _day(text: str) -> date:
+    """A day as a person writes it, YYYY-MM-DD, and as nothing else."""
+    found = re.fullmatch(r"([0-9]{4})-([0-9]{2})-([0-9]{2})", text)
+    if found is not None:
+        try:
+            return date(int(found[1]), int(found[2]), int(found[3]))
+        except ValueError:
+            pass  # a day that is no day, like 2026-02-30
+    raise CaptureError(f"{text!r} is no day. Write it as YYYY-MM-DD.")
 
 
 async def hourly(keep: Callable[[], None], every: float, stop: asyncio.Event) -> None:
@@ -738,7 +836,7 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def status(home: Path, *, alive: Callable[[int], bool] = _alive) -> str:
+def status(home: Path | None = None, *, alive: Callable[[int], bool] = _alive) -> str:
     """What the capture says of itself under home, in a line for a person.
 
     With no report the capture has never run here. While its process lives, a capture that
@@ -746,7 +844,7 @@ def status(home: Path, *, alive: Callable[[int], bool] = _alive) -> str:
     why. Any other report, and any report whose process is gone, says the capture is not
     running, and what it last said.
     """
-    said = _report(home)
+    said = _report(home if home is not None else config.seeress_home())
     if said is None:
         return "Capture has never run here."
     state, since, reason = said["state"], said["since"], said["reason"]

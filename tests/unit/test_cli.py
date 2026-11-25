@@ -264,6 +264,65 @@ def test_mine_passes_on_its_hours_and_whether_to_ask_a_model(
     assert capsys.readouterr().out == "report\nreport\n"
 
 
+def test_the_capture_commands_reach_the_work_and_print_what_it_returns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from seeress import capture
+
+    seen: list[tuple[object, ...]] = []
+
+    def review(home: Path | None = None) -> str:
+        seen.append(("review", home))
+        return "what the record holds"
+
+    def forget(home: Path | None, before: str, *, yes: bool = False) -> str:
+        seen.append(("forget", home, before, yes))
+        return "what was forgotten"
+
+    def status(home: Path | None = None) -> str:
+        seen.append(("status", home))
+        return "whether it is recording"
+
+    monkeypatch.setattr(capture, "review", review)
+    monkeypatch.setattr(capture, "forget", forget)
+    monkeypatch.setattr(capture, "status", status)
+
+    assert cli.main(["capture-review"]) == 0
+    assert cli.main(["capture-forget", "--before", "2026-10-10"]) == 0
+    assert cli.main(["capture-forget", "--yes", "--before", "2026-10-10"]) == 0
+    assert cli.main(["capture-status"]) == 0
+
+    assert seen == [
+        ("review", None),
+        ("forget", None, "2026-10-10", False),
+        ("forget", None, "2026-10-10", True),
+        ("status", None),
+    ]
+    assert capsys.readouterr().out == (
+        "what the record holds\nwhat was forgotten\nwhat was forgotten\nwhether it is recording\n"
+    )
+
+
+def test_a_day_that_is_no_day_is_refused_by_the_command_line_with_the_reason(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The throwaway home of the test is read, and nothing is deleted: the day is no day."""
+
+    assert cli.main(["capture-forget", "--before", "10/10/2026", "--yes"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("seeress error: ")
+
+
+def test_capture_forget_needs_a_day(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["capture-forget"])
+
+    assert exit_info.value.code == 2
+    assert "--before" in capsys.readouterr().err
+
+
 def test_the_help_of_the_whole_tool_lists_every_command(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exit_info:
         cli.main(["--help"])

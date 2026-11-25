@@ -17,7 +17,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from . import bodies, config, flows, mine, watcher
+from . import bodies, capture, config, flows, mine, watcher
 from .agent import DEFAULT_MAX_STEPS, chat_session, run_task
 from .errors import BrowserError, SeeressError
 
@@ -40,6 +40,10 @@ COMMANDS_HELP = """Seeress: your personal browser agent.
   seeress proposal compile NAME           the agent writes the flow, on the personal door
   seeress proposal dismiss NAME           set a proposal aside
   seeress progress                       what was proposed, compiled and run
+  seeress capture-review                 what the record holds, day by day
+  seeress capture-forget --before DATE [--yes]
+                                         delete the record from before a day
+  seeress capture-status                 whether the capture is recording
 
 --profile personal or client selects the door. It goes before or after the command, and
 beats SEERESS_PROFILE, which beats the default.
@@ -194,6 +198,29 @@ def _proposal(argv: Sequence[str]) -> int:
     return 0
 
 
+def _capture_review(argv: Sequence[str]) -> int:
+    _parser("capture-review").parse_args(argv)
+    print(capture.review())
+    return 0
+
+
+def _capture_forget(argv: Sequence[str]) -> int:
+    parser = _parser("capture-forget")
+    parser.add_argument("--before", required=True, help="a day, YYYY-MM-DD: the record before it")
+    parser.add_argument(
+        "--yes", action="store_true", help="delete them. Without it, only say what would go"
+    )
+    args = parser.parse_args(argv)
+    print(capture.forget(None, args.before, yes=args.yes))
+    return 0
+
+
+def _capture_status(argv: Sequence[str]) -> int:
+    _parser("capture-status").parse_args(argv)
+    print(capture.status())
+    return 0
+
+
 def _progress(argv: Sequence[str]) -> int:
     _parser("progress").parse_args(argv)
     print(mine.progress())
@@ -213,6 +240,9 @@ COMMANDS: dict[str, Command] = {
     "mine": _mine,
     "proposal": _proposal,
     "progress": _progress,
+    "capture-review": _capture_review,
+    "capture-forget": _capture_forget,
+    "capture-status": _capture_status,
 }
 
 
