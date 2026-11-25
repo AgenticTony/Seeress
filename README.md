@@ -3,7 +3,7 @@
 Local brains. Your browser. No credits, no cloud, no telemetry.
 
 **Status: a working prototype with foundations under it. Not production grade.** The
-agent loop, flows and the activity logger work. Under them: a lock file, 522 unit and
+agent loop, flows and the activity logger work. Under them: a lock file, 1,053 unit and
 contract tests, 7 tests on a real browser, strict types, lint, three import contracts and
 a CI workflow. They pass on the machine this was built on (macOS, arm64) and in CI on
 GitHub's macOS runner; the first green run is
@@ -114,6 +114,28 @@ enforces bare `js()` expressions and load-verification with one retry (learned l
 example.com intermittently errors from the daemon browser; iana.org is the reliable
 smoke-test target).
 
+### Find the repetitive work
+
+The activity logger records which site you were on, and when: never a page title, never
+what you typed, never a full address. From that record Seeress finds the patterns of sites
+that come back on different days, and proposes them as flows.
+
+```bash
+seeress mine                      # proposals from your own activity; the evidence first
+seeress mine --no-llm             # the evidence only
+seeress mine --hours 168          # the last week
+seeress proposal show NAME        # the evidence, and what the model thinks the task is
+seeress proposal goal NAME "…"    # your own words for the goal. This approves it
+seeress proposal compile NAME     # the agent writes the flow, on the personal door
+seeress run NAME                  # the flow, with no model
+seeress progress                  # what was proposed, compiled and run
+seeress proposal dismiss NAME
+```
+
+A proposal is evidence until you write its goal in your own words, and nothing is compiled
+from a model's sentence. What reaches a model about the record is a site, an hour and
+counts, and `mine` asks a model on the same machine only.
+
 ## Development
 
 ```bash
@@ -125,18 +147,21 @@ uv run ruff check && uv run ruff format --check
 uv run mypy && uv run lint-imports
 ```
 
-Three rules, each learned the hard way on 2026-11-24:
+Four rules, each learned the hard way:
 
 - **A unit test cannot start a process or open a socket.** `tests/conftest.py` blocks both
   unless the test is marked `e2e`, or `git` for a test that may start git and nothing
   else. Before that guard existed, a unit test patched the wrong function: the real
-  browser tool ran, and the library's daemon attached to the user's Chrome.
+  browser tool ran, and the library's daemon attached to the user's Chrome (2026-11-24).
 - **Never run the browser tool without an explicit browser address.** Given none, the
   library looks for a Chrome on this machine and drives it. On 2026-11-24 that attached a
   daemon to the user's own Chrome; a minute later remote debugging was switched off in that
   Chrome, and the activity logger fell silent.
 - **Never delete or rebuild `.venv` in place while the activity logger runs.** The logger
   starts from it. Build beside it, then swap.
+- **No test can reach the real home.** `tests/conftest.py` points `HOME` and `Path.home()`
+  at a throwaway home for every test but one marked `e2e`. On 2026-11-25 a test was found
+  rewriting the LaunchAgent file of the activity logger on every run of the suite.
 
 ### Publishing
 
