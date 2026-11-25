@@ -38,14 +38,26 @@ and an error name.
 
 ### Activity event
 
-Made by `read_events` in `seeress/activity.py` from the lines the activity logger writes, and
-read back by `Event.parse` in the same file. It is one thing a person did in their browser:
-a `navigate`, `focus`, `click`, `input`, `submit` or `select`, on one site and one path, in
-one tab or in none, at one second of the machine's local time.
+Written by `write_event` in `seeress/activity.py` for the capture, and made by `read_events`
+in the same file from the lines the spike logger writes. `Event.parse` reads one back. It is
+one thing a person did in their browser: a `navigate`, `focus`, `click`, `input`, `submit` or
+`select`, on one site and one path, in one tab or in none, at one second of the machine's
+local time.
 
 It carries the host name in lower case without a leading `www.`, and the path with its query
-and its fragment removed. It never carries a page title, typed text, a query, a fragment or
-a full URL. What may reach a model is the site, the path, the hour and counts.
+and its fragment removed. A tab is named by the first eight characters of its identifier as
+the browser writes them, which is hexadecimal in upper case. It never carries a page title,
+typed text, a query, a fragment or a full URL. What may reach a model is the site, the path,
+the hour and counts.
+
+For a `click`, an `input`, a `submit` and a `select`, and for no other kind, an event may
+carry an `action`: what was done in the page. It holds the element's tag, a fingerprint that
+tells the element apart on its page and, for an `input`, the kind of the field. A password, a
+one-time code and a card are named by their kind. A listener in the page reports it through a
+binding, from a world of the page that the page's own scripts cannot reach, and it never
+reads what a field holds. The rules that tie an action to its event are in the schema, with
+`if` and `then`, and in the reader: an action is there only for those four kinds, its `type`
+is the event's `kind`, and an `input` has a `field` while no other action has one.
 
 ### Flow
 
