@@ -14,7 +14,9 @@ concurrency:
 
 env:
   # Every job uses the interpreter pinned in .python-version and the lock file as committed.
-  UV_PYTHON_DOWNLOADS: never
+  # "manual": the step that installs that interpreter may download it, and nothing else is
+  # downloaded on uv's own initiative. "never" refused that step too, on the first run.
+  UV_PYTHON_DOWNLOADS: manual
 
 jobs:
   static:
