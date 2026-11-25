@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seeress://contracts/activity-event",
+  "title": "Activity event",
+  "description": "One thing a person did in their browser, as everything that reads the activity record sees it. read_events in seeress/activity.py makes an event from a line of the record, and Event.parse there reads one back. An event is a site, a path with no query and no fragment, a kind, a tab and a second. It carries no page title, no typed text, no query, no fragment and no full URL: what may reach a model is the site, the path, the hour and counts.",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "description": "The version of this message"
+    },
+    "ts": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$",
+      "description": "The local time of the machine, to the second, as the logger writes it"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["navigate", "focus", "click", "input", "submit", "select"],
+      "description": "What happened"
+    },
+    "site": {
+      "type": "string",
+      "pattern": "^(?!www\\.)[a-z0-9.-]+$",
+      "description": "The host name, in lower case, without a leading 'www.'"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/",
+      "description": "The URL's path with its query and its fragment removed; '/' when the URL has no path"
+    },
+    "target": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{8}$",
+      "description": "The tab, by the first eight characters of its identifier, or null when the logger cannot name it"
+    }
+  },
+  "required": ["v", "ts", "kind", "site", "path", "target"],
+  "additionalProperties": false
+}

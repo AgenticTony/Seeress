@@ -11,7 +11,7 @@ from typing import Any
 import jsonschema
 import pytest
 
-from seeress import bodies
+from seeress import activity, bodies
 
 CONTRACTS = Path(__file__).resolve().parents[2] / "contracts"
 
@@ -145,3 +145,93 @@ def test_the_probe_the_tool_is_told_to_print_matches_the_schema(kind: str) -> No
             "marker": marker,
             "error": error,
         }
+
+
+# ----------------------------------------------------------- activity event ---
+
+
+ACTIVITY_EVENT = schema("activity-event.schema.json")
+
+AN_EVENT = {
+    "v": 1,
+    "ts": "2026-11-20T09:15:02",
+    "kind": "navigate",
+    "site": "example.org",
+    "path": "/invoices/7",
+    "target": "1a2b3c4d",
+}
+
+ACCEPTED_EVENTS = [
+    pytest.param(AN_EVENT, id="navigate"),
+    pytest.param({**AN_EVENT, "kind": "focus", "target": None}, id="focus, no tab"),
+    pytest.param({**AN_EVENT, "kind": "click", "path": "/"}, id="click"),
+    pytest.param({**AN_EVENT, "kind": "input", "site": "mail.example.net"}, id="input"),
+    pytest.param(
+        {**AN_EVENT, "kind": "submit", "site": "intranet.corp", "path": "/a/b/"}, id="submit"
+    ),
+    pytest.param({**AN_EVENT, "kind": "select", "target": "5e6f7a8b"}, id="select"),
+    # JSON has one kind of number, so 1.0 is 1.
+    pytest.param({**AN_EVENT, "v": 1.0}, id="v written 1.0"),
+    # The schema judges the shape of a ts, not whether the date exists.
+    pytest.param({**AN_EVENT, "ts": "2026-13-45T25:61:61"}, id="ts that is no real date"),
+    # `$` in Python's regular expressions holds before a final newline too, and the schema's
+    # validator searches with them. So the schema accepts these, and so must the reader.
+    pytest.param({**AN_EVENT, "ts": "2026-11-20T09:15:02\n"}, id="ts ending in a newline"),
+    pytest.param({**AN_EVENT, "site": "example.org\n"}, id="site ending in a newline"),
+    pytest.param({**AN_EVENT, "target": "1a2b3c4d\n"}, id="target ending in a newline"),
+]
+
+REFUSED_EVENTS = [
+    pytest.param({**AN_EVENT, "v": 2}, id="v of another value"),
+    pytest.param({**AN_EVENT, "v": "1"}, id="v of another type"),
+    # True is 1 in Python. It is not a number in JSON.
+    pytest.param({**AN_EVENT, "v": True}, id="v true"),
+    pytest.param({**AN_EVENT, "ts": "2026-11-20"}, id="ts date only"),
+    pytest.param({**AN_EVENT, "ts": "2026-11-20T09:15:02.5"}, id="ts with a fraction of a second"),
+    pytest.param({**AN_EVENT, "ts": "2026-11-20T09:15:02+01:00"}, id="ts with an offset"),
+    pytest.param({**AN_EVENT, "ts": "2026-11-20 09:15:02"}, id="ts of an impossible shape"),
+    pytest.param(
+        {**AN_EVENT, "kind": "nav"}, id="the logger's word, where the event says navigate"
+    ),
+    pytest.param({**AN_EVENT, "kind": "hover"}, id="kind no event has"),
+    pytest.param({**AN_EVENT, "kind": None}, id="kind of another type"),
+    pytest.param({**AN_EVENT, "site": ""}, id="site empty"),
+    pytest.param({**AN_EVENT, "site": "https://example.org"}, id="site with a scheme"),
+    pytest.param({**AN_EVENT, "site": "example.org/invoices"}, id="site with a path"),
+    pytest.param({**AN_EVENT, "site": "www.example.org"}, id="site starting with www."),
+    pytest.param({**AN_EVENT, "path": "invoices/7"}, id="path not starting with a slash"),
+    pytest.param({**AN_EVENT, "target": "1a2b3c4d5"}, id="target of the wrong length"),
+    pytest.param({**AN_EVENT, "target": "1A2B3C4D"}, id="target of other characters"),
+    pytest.param({**AN_EVENT, "target": 7}, id="target of another type"),
+    pytest.param(
+        {name: value for name, value in AN_EVENT.items() if name != "target"},
+        id="a missing field",
+    ),
+    pytest.param({**AN_EVENT, "title": "Invoices"}, id="a field the schema does not know"),
+    pytest.param(None, id="something that is not an object"),
+]
+
+
+@pytest.mark.parametrize("instance", ACCEPTED_EVENTS)
+def test_the_schema_and_the_reader_agree_on_every_accepted_event(instance: object) -> None:
+    assert accepted(ACTIVITY_EVENT, instance)
+
+    event = activity.Event.parse(instance)
+
+    assert event.as_dict() == instance
+
+
+@pytest.mark.parametrize("instance", REFUSED_EVENTS)
+def test_the_schema_and_the_reader_agree_on_every_refused_event(instance: object) -> None:
+    assert not accepted(ACTIVITY_EVENT, instance)
+
+    with pytest.raises(ValueError, match="unexpected shape"):
+        activity.Event.parse(instance)
+
+
+def test_an_event_is_returned_as_a_json_object_in_the_schema_s_order() -> None:
+    """The fields come in the schema's order, and the version as the integer 1, however written."""
+    event = activity.Event.parse({**AN_EVENT, "v": 1.0})
+
+    assert list(event.as_dict()) == ["v", "ts", "kind", "site", "path", "target"]
+    assert json.dumps(event.as_dict()) == json.dumps(AN_EVENT)
