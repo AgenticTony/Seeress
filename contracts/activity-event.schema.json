@@ -22,8 +22,8 @@
     },
     "site": {
       "type": "string",
-      "pattern": "^(?!www\\.)[a-z0-9.-]+(?![\\s\\S])",
-      "description": "The host name, in lower case, without a leading 'www.'"
+      "pattern": "^(?!www\\.)[a-z0-9._-]+(?![\\s\\S])",
+      "description": "A site: the host name, in lower case, without a leading 'www.' A browser accepts an underscore in a host name, as intranet servers often have one, and so does a site"
     },
     "path": {
       "type": "string",

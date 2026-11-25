@@ -27,7 +27,7 @@ KINDS: tuple[str, ...] = ("navigate", "focus", "click", "input", "submit", "sele
 # and in the dialect JSON Schema names. `$` does not: in Python it also holds before a final
 # newline.
 TS_SHAPE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?![\s\S])")
-SITE_SHAPE = re.compile(r"^(?!www\.)[a-z0-9.-]+(?![\s\S])")
+SITE_SHAPE = re.compile(r"^(?!www\.)[a-z0-9._-]+(?![\s\S])")
 PATH_SHAPE = re.compile(r"^/")
 TARGET_SHAPE = re.compile(r"^[0-9a-f]{8}(?![\s\S])")
 

@@ -174,6 +174,8 @@ ACCEPTED_EVENTS = [
     pytest.param({**AN_EVENT, "v": 1.0}, id="v written 1.0"),
     # The schema judges the shape of a ts, not whether the date exists.
     pytest.param({**AN_EVENT, "ts": "2026-13-45T25:61:61"}, id="ts that is no real date"),
+    # A browser accepts an underscore in a host name, as intranet servers often have one.
+    pytest.param({**AN_EVENT, "site": "my_host.example"}, id="site with an underscore"),
 ]
 
 REFUSED_EVENTS = [

@@ -324,6 +324,13 @@ def test_a_host_is_read_in_lower_case_without_www(tmp_path: Path) -> None:
     assert [event.site for event in activity.read_events(tmp_path)] == ["example.org"]
 
 
+def test_a_host_with_an_underscore_is_kept(tmp_path: Path) -> None:
+    """Intranet servers are often named with an underscore, and a browser accepts that."""
+    write(tmp_path, FILE, tab_line("nav", "https://Intranet_Server/invoices/7"))
+
+    assert [event.site for event in activity.read_events(tmp_path)] == ["intranet_server"]
+
+
 def test_a_host_still_starting_with_www_holds_no_event(tmp_path: Path) -> None:
     """One www. is removed, and only one. What is left must then satisfy the schema."""
     write(tmp_path, FILE, tab_line("nav", "https://www.www.example.org/"))
