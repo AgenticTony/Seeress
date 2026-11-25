@@ -12,8 +12,10 @@ starts.
 import asyncio
 import gc
 import json
+import logging
 import os
 import re
+import signal
 import stat
 import sys
 import threading
@@ -21,12 +23,12 @@ import time
 from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from websockets.exceptions import WebSocketException
 
-from seeress import activity, capture
+from seeress import activity, capture, config
 from seeress.errors import CaptureError
 
 TS = "2026-11-20T09:15:05"
@@ -1536,12 +1538,14 @@ class Standing:
     def __init__(self) -> None:
         self.sent: list[str] = []
         self.let_in = threading.Event()
+        self.attempts = 0
         self.refused: BaseException | None = None
 
     def __call__(self, address: str, **options: object) -> "Standing":
         return self
 
     async def __aenter__(self) -> "Standing":
+        self.attempts += 1
         if self.refused is not None:
             raise self.refused
         self.let_in.set()
@@ -1822,3 +1826,278 @@ def test_with_no_home_given_the_record_is_read_in_the_seeress_home(home: Path) -
         "Deleted 1 file held from before"
     )
     assert list((seeress / "watch").iterdir()) == []
+
+
+# ------------------------------------------------------------------- the logger ---
+
+
+def test_the_logger_connects_and_stops_when_its_time_is_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    caplog.set_level(logging.INFO, logger="seeress.capture")  # what it says is info
+    standing = Standing()
+    monkeypatch.setattr(capture, "connect", standing)
+    began = time.monotonic()
+
+    said = capture.run("ws://127.0.0.1:9/devtools/browser/one", home=tmp_path, seconds=0.2)
+
+    assert said == 0
+    assert time.monotonic() - began < 2
+    assert len(standing.sent) == 4  # it connected, once
+    assert capture.status(tmp_path).startswith("Capture is not running. It last reported stopped")
+    said_lines = [record.getMessage() for record in caplog.records]
+    assert [line for line in said_lines if "events written" in line] == [
+        "0 events written; 0 outside the schedule; 0 over the cap"
+    ]
+    assert any("It last reported stopped at" in line for line in said_lines)
+    assert capsys.readouterr().out == ""  # the library prints nothing
+
+
+def test_with_no_address_given_the_logger_reads_it_where_chrome_publishes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lookup the personal door uses, and no other."""
+    standing = Standing()
+    asked: list[str | None] = []
+
+    def connect(address: str | None, **options: object) -> Standing:
+        asked.append(address)
+        return standing
+
+    monkeypatch.setattr(capture, "connect", connect)
+    monkeypatch.setattr(
+        config, "browser_env", lambda profile: {"BU_CDP_WS": "ws://127.0.0.1:9/published"}
+    )
+
+    assert capture.run(home=tmp_path, seconds=0.1) == 0
+
+    assert asked == ["ws://127.0.0.1:9/published"]
+
+
+def test_when_chrome_publishes_no_address_the_logger_connects_to_nothing_and_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Chrome is not running, or remote debugging is off. Nothing is connected to: the
+    status says why, and it tries again."""
+    asked: list[str | None] = []
+
+    def connect(address: str | None, **options: object) -> Standing:
+        asked.append(address)
+        raise AssertionError("nothing must be connected to")
+
+    monkeypatch.setattr(capture, "connect", connect)
+    monkeypatch.setattr(config, "browser_env", lambda profile: {})
+
+    assert capture.run(home=tmp_path, seconds=0.1) == 1
+
+    assert asked == []
+    said = capture.status(tmp_path)
+    assert said.startswith("Capture is down since ")
+    assert "publishes no address" in said
+
+
+class Refused:
+    """A recorder that ends at once, with its error kept and its status told. It stands in
+    for the capture's own where the logger's loop is the point and its threads are not."""
+
+    made: ClassVar[list["Refused"]] = []
+
+    def __init__(
+        self,
+        address: str,
+        emit: Callable[[activity.Event], None],
+        *,
+        keep: Callable[[], None] | None = None,
+        every: float = 3600.0,
+        status: capture.Status | None = None,
+    ) -> None:
+        self.address = address
+        self.status = status
+        self.error: BaseException | None = None
+        self.running = False
+        Refused.made.append(self)
+
+    def start(self) -> None:
+        self.error = OSError("nothing listens on 9")
+        if self.status is not None:
+            self.status.state("down", "OSError: nothing listens on 9")
+
+    def stop(self) -> None:
+        return None
+
+
+class Clock(threading.Event):
+    """A clock the test moves, and a stop that is set when the test says. Each wait advances
+    the clock by what was waited, and nothing is waited for in truth."""
+
+    def __init__(self, *, stop_after_waits: int | None = None) -> None:
+        super().__init__()
+        self.now = 0.0
+        self.waits: list[float | None] = []
+        self.stop_after_waits = stop_after_waits
+        self.stopped = False
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def is_set(self) -> bool:
+        return self.stopped
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.waits.append(timeout)
+        self.now += timeout or 0.0
+        if self.stop_after_waits is not None and len(self.waits) >= self.stop_after_waits:
+            self.stopped = True
+        return self.stopped
+
+
+def test_the_logger_tries_again_after_a_pause_when_the_connection_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The browser is away: each attempt ends at once, and the next comes RETRY_SECONDS
+    later, for as long as the logger runs. A clock the test moves, so that the count is
+    exact: at 0, 5, 10 and 15 seconds, and not after 16."""
+    Refused.made.clear()
+    clock = Clock()
+    monkeypatch.setattr(capture, "Recorder", Refused)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    said = capture.run(
+        "ws://127.0.0.1:9/devtools/browser/one", home=tmp_path, seconds=16, stop=clock
+    )
+
+    assert said == 1
+    assert [refused.address for refused in Refused.made] == [
+        "ws://127.0.0.1:9/devtools/browser/one"
+    ] * 4
+    assert clock.waits == [
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+    ]  # the pause, and no more: a recorder that has ended is not waited for
+    assert "nothing listens on 9" in capture.status(tmp_path)
+
+
+def test_a_stop_ends_the_logger_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The signal comes in the first pause. No second attempt is made, and nothing more is
+    waited for."""
+    Refused.made.clear()
+    clock = Clock(stop_after_waits=1)
+    monkeypatch.setattr(capture, "Recorder", Refused)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    said = capture.run(
+        "ws://127.0.0.1:9/devtools/browser/one", home=tmp_path, seconds=16, stop=clock
+    )
+
+    assert said == 1  # it was down when it was stopped
+    assert len(Refused.made) == 1
+    assert clock.waits == [5.0]
+
+
+def test_the_entry_point_takes_an_address_a_home_and_a_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    def run(
+        address: str | None = None,
+        *,
+        home: Path | None = None,
+        seconds: float | None = None,
+        stop: threading.Event | None = None,
+    ) -> int:
+        seen.update(address=address, home=home, seconds=seconds, stopped=stop is not None)
+        return 0
+
+    history: list[tuple[int, object]] = []
+
+    def noted(signum: int, handler: object) -> int:
+        history.append((signum, handler))
+        return signal.SIG_DFL
+
+    monkeypatch.setattr(capture, "run", run)
+    monkeypatch.setattr(signal, "signal", noted)
+
+    argv = ["ws://127.0.0.1:9/devtools/browser/one", "--home", str(tmp_path), "--seconds", "0.5"]
+
+    assert capture.main(argv) == 0
+
+    assert seen == {
+        "address": "ws://127.0.0.1:9/devtools/browser/one",
+        "home": tmp_path,
+        "seconds": 0.5,
+        "stopped": True,
+    }
+    assert [number for number, _ in history] == [
+        signal.SIGTERM,
+        signal.SIGINT,
+        signal.SIGHUP,
+        signal.SIGTERM,
+        signal.SIGINT,
+        signal.SIGHUP,
+    ]  # the three are taken, and given back
+
+
+def test_a_signal_that_asks_the_entry_point_to_end_ends_it_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Closing the terminal, or a launch agent being unloaded, sends one. The logger stops
+    as it ran, and says so. The signal is sent for real, to this process: a handler of the
+    test's own stands by first, so that were none installed the test would end, and not the
+    run."""
+    logging.getLogger("seeress").handlers.clear()  # a fresh stream for this test
+    standing = Standing()
+    monkeypatch.setattr(capture, "connect", standing)
+    real = capture.run
+    signal.signal(signal.SIGTERM, lambda *_: None)
+
+    def in_hand(
+        address: str | None = None,
+        *,
+        home: Path | None = None,
+        seconds: float | None = None,
+        stop: threading.Event | None = None,
+    ) -> int:
+        threading.Timer(0.1, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+        return real(address, home=home, seconds=30, stop=stop)
+
+    monkeypatch.setattr(capture, "run", in_hand)
+
+    began = time.monotonic()
+    argv = ["ws://127.0.0.1:9/devtools/browser/one", "--home", str(tmp_path)]
+
+    assert capture.main(argv) == 0
+    assert time.monotonic() - began < 5
+    assert "It last reported stopped at" in capsys.readouterr().err
+
+
+def test_the_entry_point_exits_one_and_says_why_when_the_capture_is_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    logging.getLogger("seeress").handlers.clear()  # a fresh stream for this test
+    standing = Standing()
+    standing.refused = OSError("nothing listens on 9")
+    monkeypatch.setattr(capture, "connect", standing)
+
+    said = capture.main(
+        ["ws://127.0.0.1:9/devtools/browser/one", "--home", str(tmp_path), "--seconds", "0.1"]
+    )
+
+    assert said == 1
+    assert "nothing listens on 9" in capsys.readouterr().err
+
+
+def test_a_settings_file_seeress_cannot_read_is_refused_by_the_entry_point(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    logging.getLogger("seeress").handlers.clear()  # a fresh stream for this test
+    (tmp_path / "config.toml").write_text("[capture]\nkeep_days = 0\n", encoding="utf-8")
+
+    assert capture.main(["ws://127.0.0.1:9/x", "--home", str(tmp_path), "--seconds", "0.1"]) == 1
+
+    assert "keep_days" in capsys.readouterr().err

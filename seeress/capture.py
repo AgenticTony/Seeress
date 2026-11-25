@@ -24,19 +24,23 @@ Nothing here looks for a browser. The capture takes an address, and whose browse
 it is for the caller to know. This module starts nothing on anyone's browser.
 """
 
+import argparse
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import re
+import signal
 import sys
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from types import FrameType
 from typing import Any, Protocol, TypeGuard
 from urllib.parse import urlsplit
 
@@ -44,9 +48,9 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import WebSocketException
 from websockets.typing import Data
 
-from . import activity, config
+from . import activity, config, log
 from .activity import DEFAULT_SCHEDULE, Event, Schedule, due, epoch, write_event
-from .errors import CaptureError
+from .errors import CaptureError, SeeressError
 
 # The cookie by which Seeress knows a browser for its own. A browser that carries it is one
 # Seeress started for a door, and nothing in it is a person's work. The name is
@@ -1216,3 +1220,136 @@ class Recorder:
             self._error = error
         finally:
             loop.close()
+
+
+# ------------------------------------------------------------------- the logger ---
+
+# How long the logger waits before it tries the browser again, when the connection ended
+# or the browser publishes no address.
+RETRY_SECONDS = 5.0
+
+# How often the logger looks whether the capture is still running.
+POLL_SECONDS = 0.1
+
+Handler = int | Callable[[int, FrameType | None], Any] | None
+
+logger = logging.getLogger("seeress.capture")
+
+# A signal that asks the process to end: closing the terminal, or unloading a launch agent.
+ENDING_SIGNALS = tuple(
+    number
+    for number in (signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGHUP", None))
+    if number is not None
+)
+
+
+def run(
+    address: str | None = None,
+    *,
+    home: Path | None = None,
+    seconds: float | None = None,
+    stop: threading.Event | None = None,
+) -> int:
+    """The capture as a logger: it connects, records, keeps the record short, and tries
+    again whenever the connection ends, until it is stopped or seconds have passed.
+
+    address is the browser's DevTools address. Left out, it is read where Chrome publishes
+    it for this user, as the spike logger read it: when nothing is published, because Chrome
+    is not running or remote debugging is off, nothing is connected to. The schedule and
+    the days kept come from the settings under home, which is the Seeress home when none is
+    given.
+
+    Returns the exit status: 0 when the capture was stopped as it ran, and 1 when it was
+    down, or had failed, when it stopped. Says on stderr what it wrote and what the status
+    holds. Nothing is written to stdout.
+
+    Raises ConfigError when the settings cannot be read.
+    """
+    home = home if home is not None else config.seeress_home()
+    settings = config.load_settings(home)
+    told = Status(home)
+    gate = Gate(home, schedule=settings.capture.schedule, status=told)
+    stop = stop if stop is not None else threading.Event()
+    began = time.monotonic()
+
+    def ended() -> bool:
+        return stop.is_set() or (seconds is not None and time.monotonic() - began >= seconds)
+
+    def keep() -> None:
+        retention(home, settings.capture.keep_days)
+
+    while not ended():
+        where = address if address is not None else config.browser_env("personal").get("BU_CDP_WS")
+        if where is None:
+            told.state("down", "Chrome publishes no address for this user")
+        else:
+            recorder = Recorder(where, gate, keep=keep, status=told)
+            recorder.start()
+            while recorder.running and not ended():
+                stop.wait(POLL_SECONDS)
+            recorder.stop()
+        if ended():
+            break
+        # The browser is away, or went away, or refused: the status says which. Wait, then
+        # try again, for as long as the logger runs.
+        stop.wait(RETRY_SECONDS)
+
+    report = _report(home)
+    dropped = gate.dropped
+    logger.info(
+        "%d events written; %d outside the schedule; %d over the cap",
+        gate.written,
+        dropped["schedule"],
+        dropped["cap"],
+    )
+    logger.info("%s", status(home))
+    return 0 if report is not None and report["state"] == "stopped" else 1
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """What `python -m seeress.capture` runs. Returns the exit status."""
+    parser = argparse.ArgumentParser(
+        prog="python -m seeress.capture",
+        description="The capture as a logger: it records what a person does in the tabs of a"
+        " browser, for this machine alone, until it is asked to stop.",
+    )
+    parser.add_argument(
+        "address",
+        nargs="?",
+        default=None,
+        help="the browser's DevTools address, as ws://... Left out, it is read where Chrome"
+        " publishes it for this user",
+    )
+    parser.add_argument(
+        "--home", type=Path, default=None, help="the Seeress home. Default: SEERESS_HOME"
+    )
+    parser.add_argument(
+        "--seconds",
+        type=float,
+        default=None,
+        help="stop after so many seconds, for a trial. Default: until asked to stop",
+    )
+    args = parser.parse_args(argv)
+    log.to_stderr()
+
+    stop = threading.Event()
+    before: dict[int, Handler] = {}
+    try:
+        for number in ENDING_SIGNALS:
+            before[number] = signal.signal(number, lambda *_: stop.set())
+    except ValueError:  # not in the main thread, where signals cannot be caught
+        pass
+    try:
+        try:
+            return run(args.address, home=args.home, seconds=args.seconds, stop=stop)
+        except (SeeressError, OSError) as error:
+            logger.error("the capture cannot run: %s", error)
+            return 1
+    finally:
+        # The handlers there were are put back.
+        for number, handler in before.items():
+            signal.signal(number, handler)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

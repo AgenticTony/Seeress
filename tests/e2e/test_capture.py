@@ -10,6 +10,8 @@ Run them with:  .venv/bin/python -m pytest -m e2e
 import gc
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -1147,3 +1149,45 @@ def test_an_element_that_has_an_id_and_a_test_id_is_named_by_its_test_id(
     assert event.action == activity.Action(
         "click", "button", 'button[data-testid="the-test"]', None
     )
+
+
+# ---------------------------------------------------------------- the logger ---
+
+
+def test_python_m_seeress_capture_is_the_logger(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """The entry point as a process, on the address of a browser Seeress started and a home
+    of its own: it records a click, and stops when its time is up, and says what it wrote.
+    The home's settings say all day, so that the hour the test runs at is nothing to it."""
+    own, address = browser
+    (home / "config.toml").write_text(
+        '[capture]\ndays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]\n'
+        'from = "00:00"\nto = "23:00"\n',
+        encoding="utf-8",
+    )
+    tab = own.tab(f"{site}/")
+    # The interpreter of this run, an address given, and a home of the test's own.
+    logger = subprocess.Popen(
+        [sys.executable, "-m", "seeress.capture", address, "--home", str(home), "--seconds", "4"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "SEERESS_HOME": str(home)},
+    )
+    try:
+        listened(tab)
+        tab.click('[data-testid="save"]')
+        until(lambda: activity.read_events(home), "the click in the record", 10)
+        out, err = logger.communicate(timeout=20)
+    finally:
+        tab.close()
+        if logger.poll() is None:
+            logger.kill()
+            logger.wait()
+
+    assert logger.returncode == 0, err
+    assert out == ""
+    assert "1 events written; 0 outside the schedule; 0 over the cap" in err
+    assert "It last reported stopped at" in err
+    assert capture.status(home).startswith("Capture is not running. It last reported stopped at ")
