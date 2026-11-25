@@ -6,6 +6,7 @@ shape is written down. A boundary is a process, a language or a trust zone:
 | Boundary | Examples | Phase |
 |---|---|---|
 | Process: Seeress to the browser tool | [Browser body probe](browser-body-probe.schema.json) | 0 |
+| Process: the capture to `seeress capture-status` | [Capture status](capture-status.schema.json) | 1 |
 | Trust zone: the activity record to what reads it | [Activity event](activity-event.schema.json) | 1 |
 | Process: the miner to the compiler | [Flow](flow.schema.json) | 1 |
 | Trust zone: the miner to the person who decides | [Flow proposal](flow-proposal.schema.json) | 1 |
@@ -47,8 +48,8 @@ local time.
 It carries the host name in lower case without a leading `www.`, and the path with its query
 and its fragment removed. A tab is named by the first eight characters of its identifier as
 the browser writes them, which is hexadecimal in upper case. It never carries a page title,
-typed text, a query, a fragment or a full URL. What may reach a model is the site, the path,
-the hour and counts.
+typed text, a query, a fragment or a full URL. What reaches a model is the site, the hour
+and counts: a path is shown to the person and never sent.
 
 For a `click`, an `input`, a `submit` and a `select`, and for no other kind, an event may
 carry an `action`: what was done in the page. It holds the element's tag, a fingerprint that
@@ -86,3 +87,14 @@ is where it stands: `proposed`, `approved` by the user, `compiled` into a flow, 
 The free text a proposal carries is the sentence of its goal and, once a person has written
 them, the intents of its steps. Otherwise it carries sites, an hour, days and counts. It
 never carries a path, a page title, typed text, a query, a fragment or a full URL.
+
+### Capture status
+
+Written by `write_status` in `seeress/capture.py` for the capture, whole, in place of what
+was there, and read back by `_report` in the same file for `seeress capture-status`. It says
+whether the capture is recording: the process, the state, the reason when it is down or has
+failed, since when, how many events were written and when the last was.
+
+It holds no page content, and nothing of any event but the time of the last one. A reader
+that meets a state or a field it does not know leaves it as it is. The schema judges the
+shape of a time, not whether the moment exists; the reader judges both.

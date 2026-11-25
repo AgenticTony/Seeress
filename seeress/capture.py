@@ -849,7 +849,9 @@ def _report(home: Path) -> dict[str, Any] | None:
     """What the status file says, or None when it is no report.
 
     A report holds every field of its kind, and its times are times. A capture that is
-    down says why. Anything else, a file that cannot be read included, says nothing.
+    down says why. Anything else, a file that cannot be read included, says nothing. The
+    shape is contracts/capture-status.schema.json; a contract test keeps this reader and
+    that schema in agreement.
     """
     try:
         said = json.loads((home / "watch" / STATUS_FILE).read_text(encoding="utf-8"))
@@ -859,14 +861,15 @@ def _report(home: Path) -> dict[str, Any] | None:
         return None
     state, pid, reason = said.get("state"), said.get("pid"), said.get("reason")
     since, events, last = said.get("since"), said.get("events"), said.get("last_event")
+    process, count = _whole(pid), _whole(events)
     if not (
         isinstance(state, str)
         and isinstance(since, str)
         and (reason is None or isinstance(reason, str))
-        and type(pid) is int  # not a bool: true is no process
-        and pid > 0
-        and type(events) is int
-        and events >= 0
+        and process is not None  # not a bool: true is no process
+        and process > 0
+        and count is not None
+        and count >= 0
     ):
         return None
     try:
@@ -877,7 +880,22 @@ def _report(home: Path) -> dict[str, Any] | None:
         return None
     if state == "down" and reason is None:
         return None
-    return said
+    # JSON has one kind of number, and the schema takes a whole one written as a float. It
+    # comes back as the integer it is, so that nothing downstream meets a float.
+    return {**said, "pid": process, "events": count}
+
+
+def _whole(value: object) -> int | None:
+    """The value as a whole number, or None. JSON has one kind of number, so 4242.0 is 4242.
+    True is not a number at all.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
 
 
 def _alive(pid: int) -> bool:

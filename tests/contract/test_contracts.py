@@ -5,11 +5,12 @@ the reader refuses. A schema that drifts from its reader is a contract nobody ca
 """
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from seeress import activity, bodies
+from seeress import activity, bodies, capture
 
 from .schemas import accepted, schema
 
@@ -136,6 +137,7 @@ def test_the_probe_the_tool_is_told_to_print_matches_the_schema(kind: str) -> No
 
 
 ACTIVITY_EVENT = schema("activity-event.schema.json")
+CAPTURE_STATUS = schema("capture-status.schema.json")
 
 AN_EVENT = {
     "v": 1,
@@ -463,3 +465,114 @@ def test_the_rules_between_two_fields_are_written_where_the_fields_are() -> None
         assert set(rule) == {"if", "then"}
     for rule in action_rules:
         assert rule["if"]["type"] == "object"
+
+
+# --------------------------------------------------------------- the capture's status ---
+
+
+A_STATUS = {
+    "pid": 4242,
+    "state": "recording",
+    "reason": None,
+    "since": "2026-11-25T21:36:39",
+    "events": 12,
+    "last_event": "2026-11-25T21:40:03",
+}
+
+ACCEPTED_STATUSES = [
+    pytest.param(A_STATUS, id="recording"),
+    pytest.param(
+        {**A_STATUS, "state": "connected", "events": 0, "last_event": None}, id="connected"
+    ),
+    pytest.param({**A_STATUS, "state": "stopped"}, id="stopped"),
+    pytest.param(
+        {**A_STATUS, "state": "failed", "reason": "OSError: nothing listens on 9"}, id="failed"
+    ),
+    pytest.param(
+        {**A_STATUS, "state": "down", "reason": "Chrome publishes no address for this user"},
+        id="down, with its reason",
+    ),
+    pytest.param(
+        {**A_STATUS, "state": "a state a newer capture writes"},
+        id="a state this reader does not know: shown as it is",
+    ),
+    pytest.param(
+        {**A_STATUS, "a field a newer capture adds": 1},
+        id="a field this reader does not know: left alone",
+    ),
+    # JSON has one kind of number, so 4242.0 is 4242.
+    pytest.param({**A_STATUS, "pid": 4242.0, "events": 12.0}, id="whole numbers written as floats"),
+]
+
+REFUSED_STATUSES = [
+    pytest.param({}, id="nothing"),
+    pytest.param(
+        {name: value for name, value in A_STATUS.items() if name != "since"}, id="no since"
+    ),
+    pytest.param({**A_STATUS, "pid": 0}, id="no process"),
+    pytest.param({**A_STATUS, "pid": -1}, id="a negative process"),
+    pytest.param({**A_STATUS, "pid": True}, id="true is no process"),
+    pytest.param({**A_STATUS, "pid": "4242"}, id="a process as text"),
+    pytest.param({**A_STATUS, "pid": 4242.5}, id="a process with a fraction"),
+    pytest.param({**A_STATUS, "state": None}, id="no state"),
+    pytest.param({**A_STATUS, "state": 7}, id="a state that is not text"),
+    pytest.param({**A_STATUS, "reason": 7}, id="a reason that is not text"),
+    pytest.param({**A_STATUS, "state": "down", "reason": None}, id="down with no reason"),
+    pytest.param({**A_STATUS, "events": -1}, id="a negative count"),
+    pytest.param({**A_STATUS, "events": True}, id="a count that is true"),
+    pytest.param({**A_STATUS, "events": 12.5}, id="a count with a fraction"),
+    pytest.param({**A_STATUS, "last_event": "2026-11-25"}, id="a last event of no time shape"),
+    pytest.param({**A_STATUS, "last_event": 7}, id="a last event that is not text"),
+    pytest.param({**A_STATUS, "since": "yesterday"}, id="a since that is no time"),
+    pytest.param([A_STATUS], id="a list"),
+]
+
+
+def written_status(tmp_path: Path, instance: object) -> None:
+    (tmp_path / "watch").mkdir()
+    (tmp_path / "watch" / capture.STATUS_FILE).write_text(json.dumps(instance), encoding="utf-8")
+
+
+@pytest.mark.parametrize("instance", ACCEPTED_STATUSES)
+def test_the_schema_and_the_reader_agree_on_every_accepted_status(
+    instance: object, tmp_path: Path
+) -> None:
+    assert accepted(CAPTURE_STATUS, instance)
+
+    written_status(tmp_path, instance)
+
+    assert capture._report(tmp_path) == instance
+
+
+@pytest.mark.parametrize("instance", REFUSED_STATUSES)
+def test_the_schema_and_the_reader_agree_on_every_refused_status(
+    instance: object, tmp_path: Path
+) -> None:
+    assert not accepted(CAPTURE_STATUS, instance)
+
+    written_status(tmp_path, instance)
+
+    assert capture._report(tmp_path) is None
+
+
+def test_the_rule_between_two_fields_of_the_status_is_written_in_the_schema() -> None:
+    """An instance shows only that the two agree on that instance. A capture that is down
+    says why: the rule is in the schema, with if and then, once."""
+    rules = CAPTURE_STATUS["allOf"]
+
+    assert rules == [
+        {
+            "if": {"properties": {"state": {"const": "down"}}, "required": ["state"]},
+            "then": {"properties": {"reason": {"type": "string"}}},
+        }
+    ]
+
+
+def test_the_times_of_the_status_are_the_times_of_an_event() -> None:
+    """One shape of a time, wherever it crosses a boundary."""
+    said = CAPTURE_STATUS["properties"]
+
+    assert said["since"]["pattern"] == ACTIVITY_EVENT["properties"]["ts"]["pattern"]
+    assert (
+        said["last_event"]["anyOf"][1]["pattern"] == ACTIVITY_EVENT["properties"]["ts"]["pattern"]
+    )

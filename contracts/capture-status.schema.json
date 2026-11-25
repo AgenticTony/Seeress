@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seeress://contracts/capture-status",
+  "title": "Capture status",
+  "description": "What the capture says of itself, in one file under the Seeress home, for the command that tells a person whether the capture is recording. write_status in seeress/capture.py writes it whole, replacing what was there, and _report there reads it back. It holds the process, the state, the reason if the capture is down, since when the state is what it is, how many events were written and when the last was. It holds no page content, and nothing of any event but the time of the last one.",
+  "type": "object",
+  "required": ["pid", "state", "reason", "since", "events", "last_event"],
+  "properties": {
+    "pid": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The number of the process that wrote the report, so that a reader can tell whether it still runs"
+    },
+    "state": {
+      "type": "string",
+      "description": "connected, recording, stopped, down or failed. A reader that meets a state it does not know shows it as it is"
+    },
+    "reason": {
+      "type": ["string", "null"],
+      "description": "Why the capture is down, or why it failed. Nothing when it is neither"
+    },
+    "since": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?![\\s\\S])",
+      "description": "When the state began, in the local time of the machine. It stays while the state stays, in the same process"
+    },
+    "events": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many events the capture has written in this run"
+    },
+    "last_event": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?![\\s\\S])" }
+      ],
+      "description": "When the last event was written, in the local time of the machine. Nothing when none was. The schema judges the shape of a time, not whether the moment exists"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "down" } }, "required": ["state"] },
+      "then": { "properties": { "reason": { "type": "string" } } }
+    }
+  ]
+}
