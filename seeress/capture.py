@@ -154,15 +154,19 @@ LISTENER = r"""(() => {
     // visit of the keyboard, not once a keystroke.
     let typing = null;
 
-    // Each listener is wrapped, so that nothing of this listener's may reach the page.
+    // Each listener is wrapped, so that nothing of this listener's may reach the page. And
+    // only what the browser itself did is the person's: a page's script can say that a
+    // click, an input or a change happened, and the browser does not trust what it says.
     const on = (type, work) => {
-      document.addEventListener(type, (event) => {
+      const handler = (event) => {
         try {
+          if (!event.isTrusted) return;
           work(event);
         } catch (error) {
           // Nothing of this listener's may reach the page.
         }
-      }, true);
+      };
+      document.addEventListener(type, handler, true);
     };
 
     on("click", (event) => {

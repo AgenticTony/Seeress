@@ -1469,3 +1469,12 @@ def test_the_capture_s_connection_has_no_proxy_and_no_bound_on_one_message(
         asyncio.run(capture.watch("ws://127.0.0.1:9/devtools/browser/none", lambda event: None))
 
     assert asked == {"max_size": None, "proxy": None}
+
+
+def test_the_listener_takes_only_what_the_browser_did() -> None:
+    """A page can say that a click, an input, a submit or a change happened. The browser does
+    not trust such an event, and neither does the listener: before anything else is done
+    with an event, it is asked whether the browser did it."""
+    gate = "          if (!event.isTrusted) return;\n          work(event);\n"
+
+    assert gate in capture.LISTENER

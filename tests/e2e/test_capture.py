@@ -253,7 +253,13 @@ def test_a_click_inside_a_frame_is_not_the_person_s_click(
             ".querySelector('[data-testid=\"in-frame\"]')"
         )
         until(lambda: tab.run(f"!!{in_frame}"), "the frame to have loaded", 10)
-        tab.run(f"{in_frame}.click()")
+        x, y = tab.run(
+            "(() => { const outer = document.querySelector('iframe').getBoundingClientRect();"
+            f" const inner = {in_frame}.getBoundingClientRect();"
+            " return [outer.left + inner.left + inner.width / 2,"
+            " outer.top + inner.top + inner.height / 2]; })()"
+        )
+        tab.click_at(x, y)  # a mouse's click, on the button that is in the frame
         waited_a_moment()
 
         tab.click('[data-testid="save"]')
@@ -327,7 +333,13 @@ def test_a_click_on_a_custom_element_is_a_click_on_an_element(
     tab = own.tab(f"{site}/")
     try:
         listened(tab)
-        tab.click("my-widget")
+        # The element itself is clicked, on padding of its own: a mouse that clicked in the
+        # middle of it would click the text inside it.
+        x, y = tab.run(
+            "(() => { const w = document.querySelector('my-widget'); w.style.padding = '12px';"
+            " const r = w.getBoundingClientRect(); return [r.left + 4, r.top + 4]; })()"
+        )
+        tab.click_at(x, y)
         (event,) = until(lambda: recording.of_kind("click"), "a click event", 10)
 
         assert event.action is not None
@@ -375,15 +387,11 @@ def test_a_select_is_reported_once_as_a_select(
     tab = own.tab(f"{site}/")
     try:
         listened(tab)
-        tab.run(
-            "const select = document.querySelector('select'); select.selectedIndex = 1;"
-            " select.dispatchEvent(new Event('input', {bubbles: true}));"
-            " select.dispatchEvent(new Event('change', {bubbles: true}));"
-        )
+        tab.pick("select", "d")  # for Denmark, as a keyboard chooses
         (event,) = until(lambda: recording.of_kind("select"), "a select event", 10)
         waited_a_moment()
 
-        assert recording.kinds() == ["select"]
+        assert recording.kinds() == ["select"]  # and once: not the input a select also fires
         assert event.action == activity.Action("select", "select", 'select[name="country"]', None)
     finally:
         tab.close()
@@ -396,7 +404,7 @@ def test_a_submit_is_reported(home: Path, browser: tuple[Browser, str], site: st
     tab = own.tab(f"{site}/")
     try:
         listened(tab)
-        tab.run("document.querySelector('form').requestSubmit()")
+        tab.click('button[type="submit"]')  # as a person submits a form: its button is clicked
         (event,) = until(lambda: recording.of_kind("submit"), "a submit event", 10)
 
         assert event.action == activity.Action("submit", "form", 'form[id="signup"]', None)
@@ -618,8 +626,8 @@ def test_the_title_of_a_page_is_nowhere_in_what_the_capture_wrote(
         listened(tab)
         tab.type_text(TYPED, 'input[name="query"]')
         tab.click('[data-testid="save"]')
-        tab.run("document.querySelector('form').requestSubmit()")
-        until(lambda: len(recording.events()) == 3, "an input, a click and a submit", 10)
+        tab.click('button[type="submit"]')
+        until(lambda: len(recording.events()) == 4, "an input, two clicks and a submit", 10)
     finally:
         tab.close()
         recording.stop()
@@ -947,3 +955,80 @@ def test_one_large_message_from_a_page_does_not_end_the_capture(
     assert recording.recorder.error is None, recording.recorder.error
     (event,) = found
     assert event.kind == "click"
+
+
+# ------------------------------------------------- only what a person does is theirs ---
+
+
+def test_a_click_a_page_s_script_makes_is_not_taken_for_a_person_s(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """A page can say that a click happened. The browser does not trust such an event, and
+    neither does the capture: it would let a page write what it chose, at any rate."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        for _ in range(5):
+            tab.click_by_script('[data-testid="save"]')
+        waited_a_moment()
+        assert recording.events() == []
+
+        tab.click('[data-testid="save"]')  # the browser's own click, as a mouse makes it
+        (event,) = until(lambda: recording.of_kind("click"), "a click event", 10)
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert event.action == activity.Action("click", "button", 'button[data-testid="save"]', None)
+
+
+def test_an_input_a_page_s_script_makes_is_not_taken_for_a_person_s(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        tab.run(
+            "for (const field of document.querySelectorAll('input')) {"
+            " field.value = 'written by a script';"
+            " field.dispatchEvent(new Event('input', {bubbles: true})); }"
+        )
+        waited_a_moment()
+        assert recording.events() == []
+
+        tab.type_text(TYPED, 'input[name="query"]')
+        (event,) = until(lambda: recording.of_kind("input"), "an input event", 10)
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert (event.action.tag, event.action.field) == ("input", "text")
+
+
+def test_a_change_a_page_s_script_makes_on_a_select_is_not_taken_for_a_person_s(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        tab.run(
+            "const select = document.querySelector('select'); select.selectedIndex = 1;"
+            " select.dispatchEvent(new Event('input', {bubbles: true}));"
+            " select.dispatchEvent(new Event('change', {bubbles: true}));"
+        )
+        waited_a_moment()
+        assert recording.events() == []
+
+        tab.pick("select", "s")  # back to Sweden, as a keyboard chooses: a change that is real
+        (event,) = until(lambda: recording.of_kind("select"), "a select event", 10)
+    finally:
+        tab.close()
+        recording.stop()
+
+    assert event.action == activity.Action("select", "select", 'select[name="country"]', None)

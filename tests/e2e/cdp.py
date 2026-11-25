@@ -113,11 +113,55 @@ class Tab:
         """Bring the tab to the front, where what is typed goes."""
         self.call("Page.bringToFront")
 
+    def middle(self, selector: str) -> tuple[float, float]:
+        """Where the middle of the first element a selector names is, in the page."""
+        element = f"document.querySelector({json.dumps(selector)})"
+        x, y = self.run(
+            f"(() => {{ const r = {element}.getBoundingClientRect();"
+            " return [r.left + r.width / 2, r.top + r.height / 2]; })()"
+        )
+        return (x, y)
+
     def click(self, selector: str) -> None:
-        """Click the first element a selector names, as a click of the page's own."""
-        element = self.run(f"document.querySelector({json.dumps(selector)})")
-        assert element is not None, f"no element for {selector}"
+        """Click the first element a selector names, in the middle of it, as a mouse does.
+        The click is the browser's own, which is what a person's is to the page."""
+        element = self.run(f"document.querySelector({json.dumps(selector)}) !== null")
+        assert element, f"no element for {selector}"
+        x, y = self.middle(selector)
+        self.click_at(x, y)
+
+    def click_at(self, x: float, y: float) -> None:
+        """Click at a point of the page, as a mouse does."""
+        for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
+            self.call(
+                "Input.dispatchMouseEvent",
+                {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1},
+            )
+
+    def click_by_script(self, selector: str) -> None:
+        """Click the first element a selector names from a script of the page. To the page
+        it is no person's click."""
         self.run(f"document.querySelector({json.dumps(selector)}).click()")
+
+    def pick(self, selector: str, letter: str) -> None:
+        """Choose in the select a selector names by the first letter of an option, as a
+        keyboard does."""
+        self.front()
+        self.run(f"document.querySelector({json.dumps(selector)}).focus()")
+        code = ord(letter.upper())
+        for kind, text in (("keyDown", letter), ("keyUp", "")):
+            self.call(
+                "Input.dispatchKeyEvent",
+                {
+                    "type": kind,
+                    "key": letter,
+                    "code": f"Key{letter.upper()}",
+                    "text": text,
+                    "unmodifiedText": text,
+                    "windowsVirtualKeyCode": code,
+                    "nativeVirtualKeyCode": code,
+                },
+            )
 
     def type_text(self, text: str, selector: str) -> None:
         """Type into the field a selector names, as a keyboard does."""
