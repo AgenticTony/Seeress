@@ -7,8 +7,14 @@ tests/e2e/test_capture.py tries the listener and the connection on a browser tha
 starts.
 """
 
+import asyncio
 import json
+import os
 import re
+import stat
+import sys
+import time
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -928,3 +934,444 @@ def test_an_event_that_cannot_be_written_ends_the_gate_with_the_error(tmp_path: 
         gate(clicks(1)[0])
 
     assert gate.written == 0
+
+
+# ------------------------------------------------------ what is kept, and the status ---
+
+
+# A day that is not today's, whenever the test runs.
+TODAY = date(2027, 3, 31)
+
+
+def held(home: Path, day: str) -> Path:
+    """A file of the capture that holds one event written on that day, as 20261025."""
+    ts = f"{day[:4]}-{day[4:6]}-{day[6:]}T10:00:00"
+    return activity.write_event(home, clicks(1, first=ts)[0], now=activity.epoch(ts))
+
+
+def others(watch: Path) -> list[Path]:
+    """Files of the record that the capture did not write, one of each kind there is."""
+    made = []
+    for name in (
+        "spike-20261001.jsonl",
+        "spike-20261020.jsonl",
+        "agent-runs.jsonl",
+        "flow-runs.jsonl",
+        "activity-notes.jsonl",
+        "activity-2026103.jsonl",
+        "capture-status.json",
+    ):
+        path = watch / name
+        path.write_text("a line that is nobody's to delete here\n", encoding="utf-8")
+        made.append(path)
+    return made
+
+
+def test_retention_deletes_what_is_older_than_the_days_kept_in_day_order(tmp_path: Path) -> None:
+    """Thirty days are kept. Today is 31 March 2027: a file of 1 March is thirty days old
+    and is kept; four before it are older and go, their oldest day first."""
+    gone = [held(tmp_path, day) for day in ("20270101", "20270115", "20270202", "20270228")]
+    kept = held(tmp_path, "20270301")
+    new = held(tmp_path, "20270331")
+
+    deleted = capture.retention(tmp_path, 30, today=TODAY)
+
+    assert deleted == gone
+    assert not any(path.exists() for path in gone)
+    assert kept.exists() and new.exists()
+
+
+def test_retention_touches_no_file_but_the_capture_s(tmp_path: Path) -> None:
+    """The spike logger's files least of all."""
+    held(tmp_path, "20261001")
+    untouched = others(tmp_path / "watch")
+
+    assert len(capture.retention(tmp_path, 30, today=date(2026, 11, 25))) == 1
+
+    assert all(path.exists() for path in untouched)
+    assert sorted(path.name for path in (tmp_path / "watch").iterdir()) == sorted(
+        path.name for path in untouched
+    )
+
+
+def test_retention_with_no_day_given_uses_the_machine_s(tmp_path: Path) -> None:
+    forty_days_ago = (date.today() - timedelta(days=40)).strftime("%Y%m%d")
+    old = held(tmp_path, forty_days_ago)
+
+    deleted = capture.retention(tmp_path, 30)
+
+    assert deleted == [old]
+    assert not old.exists()
+
+
+def test_retention_of_a_record_that_is_not_there_is_nothing(tmp_path: Path) -> None:
+    assert capture.retention(tmp_path, 30, today=date(2026, 11, 25)) == []
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_what_is_kept_is_done_now_and_again_every_so_often_until_stopped() -> None:
+    """A clock the test can move: every is a hundredth of a second here."""
+    said: list[int] = []
+    stop = asyncio.Event()
+
+    def keep() -> None:
+        said.append(len(said))
+        if len(said) == 3:
+            stop.set()
+        if len(said) > 3:  # asked of after the stop: that is a capture that never rests
+            raise AssertionError("kept after the stop")
+
+    asyncio.run(capture.hourly(keep, 0.01, stop))
+
+    assert said == [0, 1, 2]
+
+
+def test_what_is_kept_ends_with_its_error() -> None:
+    """A failure to delete is not hidden: the capture ends with it."""
+
+    def keep() -> None:
+        raise OSError("the record could not be deleted")
+
+    with pytest.raises(OSError, match="could not be deleted"):
+        asyncio.run(capture.hourly(keep, 0.01, asyncio.Event()))
+
+
+# ------------------------------------------------------------------- the status ---
+
+
+def said_to_be(
+    home: Path, state: str, reason: str | None = None, **counts: Any
+) -> dict[str, object]:
+    """Write the status once, and return what the file holds."""
+    capture.write_status(
+        home,
+        state,
+        reason,
+        events=counts.get("events", 0),
+        last_event=counts.get("last_event"),
+        now=counts.get("now", WHEN),
+    )
+    path = home / "watch" / "capture-status.json"
+    data: dict[str, object] = json.loads(path.read_text(encoding="utf-8"))
+    return data
+
+
+def test_the_status_file_holds_what_the_capture_says_of_itself(tmp_path: Path) -> None:
+    data = said_to_be(tmp_path, "connected", None, events=7, last_event=TS)
+
+    assert data == {
+        "pid": os.getpid(),
+        "state": "connected",
+        "reason": None,
+        "since": TS,
+        "events": 7,
+        "last_event": TS,
+    }
+    assert stat.S_IMODE((tmp_path / "watch" / "capture-status.json").stat().st_mode) == 0o600
+    # The report replaces what was there and leaves nothing beside it.
+    assert [path.name for path in (tmp_path / "watch").iterdir()] == ["capture-status.json"]
+
+
+def test_one_event_is_one_event(tmp_path: Path) -> None:
+    said_to_be(tmp_path, "connected", None, events=1, last_event=TS)
+
+    assert report(tmp_path).endswith(f"(pid {os.getpid()}): 1 event, the last at {TS}.")
+
+
+def test_the_since_of_a_state_is_kept_while_the_state_stays_the_same(tmp_path: Path) -> None:
+    said_to_be(tmp_path, "connected", None, now=WHEN)
+    later = WHEN + 3600
+
+    data = said_to_be(tmp_path, "connected", None, events=3, last_event=TS, now=later)
+
+    assert data["since"] == TS  # of the first report
+    assert data["events"] == 3
+
+    down = said_to_be(tmp_path, "down", "ConnectionRefusedError", now=later + 60)
+
+    assert down["since"] == activity.clock(later + 60)  # the state changed
+
+    again = said_to_be(tmp_path, "down", "ConnectionRefusedError", now=later + 120)
+
+    assert again["since"] == down["since"]  # and then it did not
+
+
+def alive_only_this_process(pid: int) -> bool:
+    return pid == os.getpid()
+
+
+def report(home: Path) -> str:
+    return capture.status(home, alive=alive_only_this_process)
+
+
+def test_with_no_status_file_the_capture_has_never_run(tmp_path: Path) -> None:
+    assert report(tmp_path) == "Capture has never run here."
+
+
+def test_with_a_status_file_that_cannot_be_read_the_capture_has_never_run(tmp_path: Path) -> None:
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    (watch / "capture-status.json").write_text("{not json", encoding="utf-8")
+    assert report(tmp_path) == "Capture has never run here."
+
+    (watch / "capture-status.json").write_text("[1, 2]", encoding="utf-8")  # no object
+    assert report(tmp_path) == "Capture has never run here."
+
+    (watch / "capture-status.json").write_text('{"state": "somewhere"}', encoding="utf-8")
+    assert report(tmp_path) == "Capture has never run here."
+
+
+def test_a_capture_whose_process_is_gone_is_not_running(tmp_path: Path) -> None:
+    said_to_be(tmp_path, "connected", None, events=2, last_event=TS)
+
+    gone = capture.status(tmp_path, alive=lambda pid: False)
+
+    assert gone == f"Capture is not running. It last reported connected at {TS}."
+
+
+def test_a_capture_that_is_recording_says_since_when_and_how_much(tmp_path: Path) -> None:
+    said_to_be(tmp_path, "connected", None, events=2, last_event=TS)
+
+    assert report(tmp_path) == (
+        f"Capture is recording since {TS} (pid {os.getpid()}): 2 events, the last at {TS}."
+    )
+
+    said_to_be(tmp_path, "connected", None, events=0, last_event=None)
+
+    assert report(tmp_path).endswith(f"(pid {os.getpid()}): 0 events.")
+
+
+def test_a_capture_that_is_down_says_since_when_and_why(tmp_path: Path) -> None:
+    said_to_be(tmp_path, "down", "ConnectionRefusedError: nothing listens on 9")
+
+    assert report(tmp_path) == (
+        f"Capture is down since {TS}: ConnectionRefusedError: nothing listens on 9."
+        " Is remote debugging on in Chrome? chrome://inspect/#remote-debugging"
+    )
+
+
+def test_a_status_that_tells_no_time_is_no_report(tmp_path: Path) -> None:
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    (watch / "capture-status.json").write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "state": "connected",
+                "reason": None,
+                "since": "yesterday",
+                "events": 1,
+                "last_event": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert report(tmp_path) == "Capture has never run here."
+
+
+def test_the_status_says_what_the_gate_has_written(tmp_path: Path) -> None:
+    """The status is told of the state, and counts what passes the gate. It is written at
+    once for a state, and now and then for an event."""
+    status = capture.Status(tmp_path)
+    gate = capture.Gate(tmp_path, status=status)
+
+    status.state("connected")
+    passed(gate, clicks(3, first="2026-11-20T09:15:00"))
+    assert report(tmp_path).endswith(" 0 events.")  # an event does not write the file at once
+
+    status.flush()
+
+    assert report(tmp_path).endswith("3 events, the last at 2026-11-20T09:15:00.")
+
+
+def test_a_status_told_to_write_often_writes_as_the_events_come(tmp_path: Path) -> None:
+    """every is how long a count may stay unwritten. Nothing, here: each event is written."""
+    status = capture.Status(tmp_path, every=0)
+    gate = capture.Gate(tmp_path, status=status)
+    status.state("connected")
+
+    passed(gate, clicks(2, first="2026-11-20T09:15:00"))
+
+    assert report(tmp_path).endswith("2 events, the last at 2026-11-20T09:15:00.")
+
+
+def test_the_since_of_a_new_process_starts_again(tmp_path: Path) -> None:
+    """What another process said of itself is not this one's since."""
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    (watch / "capture-status.json").write_text(
+        json.dumps(
+            {
+                "pid": os.getpid() + 1,
+                "state": "connected",
+                "reason": None,
+                "since": TS,
+                "events": 5,
+                "last_event": TS,
+            }
+        ),
+        encoding="utf-8",
+    )
+    later = WHEN + 3600
+
+    data = said_to_be(tmp_path, "connected", None, now=later)
+
+    assert data["since"] == activity.clock(later)
+
+
+def test_a_capture_that_stopped_is_not_running(tmp_path: Path) -> None:
+    said_to_be(tmp_path, "stopped", None)
+
+    assert report(tmp_path) == f"Capture is not running. It last reported stopped at {TS}."
+
+
+def test_a_capture_that_is_down_whose_process_is_gone_says_why_it_went(tmp_path: Path) -> None:
+    said_to_be(tmp_path, "down", "CaptureError: this browser is Seeress's own")
+
+    gone = capture.status(tmp_path, alive=lambda pid: False)
+
+    assert gone == (
+        f"Capture is not running. It last reported down at {TS}:"
+        " CaptureError: this browser is Seeress's own."
+    )
+
+
+def test_a_capture_that_is_down_with_no_reason_is_no_report(tmp_path: Path) -> None:
+    said_to_be(tmp_path, "down", None)
+
+    assert report(tmp_path) == "Capture has never run here."
+
+
+def test_whether_a_process_is_alive_is_asked_of_the_system() -> None:
+    assert capture._alive(os.getpid())
+    assert capture._alive(2**31 - 1) is False  # further than any system numbers its processes
+    assert capture._alive(1)  # the system's own, which this user may not signal
+    assert capture._alive(0) is False  # the group of this process, and no process at all
+
+
+def test_on_windows_a_process_is_never_asked_by_a_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """There a signal of zero is no question: it ends the process, with no word said."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with pytest.raises(NotImplementedError, match="Windows"):
+        capture._alive(os.getpid())
+
+
+def test_nothing_is_said_before_the_capture_has_a_state(tmp_path: Path) -> None:
+    capture.Status(tmp_path).flush()
+
+    assert report(tmp_path) == "Capture has never run here."
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_file_of_eight_digits_that_are_no_day_is_left_alone(tmp_path: Path) -> None:
+    """Not the capture's to judge, and not a reason to stop keeping the rest."""
+    odd = tmp_path / "watch" / "activity-99999999.jsonl"
+    odd.parent.mkdir()
+    odd.write_text("eight digits that are no day\n", encoding="utf-8")
+
+    assert capture.retention(tmp_path, 1, today=TODAY) == []
+    assert odd.exists()
+
+
+def test_what_is_kept_is_done_before_any_wait() -> None:
+    """Were the wait to come first, an hour would pass before anything was kept."""
+    stop = asyncio.Event()
+    said: list[int] = []
+
+    def keep() -> None:
+        said.append(1)
+        stop.set()
+
+    asyncio.run(asyncio.wait_for(capture.hourly(keep, 3600, stop), 5))
+
+    assert said == [1]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("pid", 0),
+        ("pid", -5),
+        ("pid", True),
+        ("events", -1),
+        ("events", "many"),
+        ("events", True),
+        ("last_event", "yesterday"),
+        ("state", 5),
+        ("reason", 5),
+    ],
+)
+def test_a_report_short_of_its_kind_is_no_report(tmp_path: Path, field: str, value: object) -> None:
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    whole: dict[str, object] = {
+        "pid": os.getpid(),
+        "state": "connected",
+        "reason": None,
+        "since": TS,
+        "events": 1,
+        "last_event": TS,
+    }
+    (watch / "capture-status.json").write_text(
+        json.dumps({**whole, field: value}), encoding="utf-8"
+    )
+
+    assert capture.status(tmp_path) == "Capture has never run here."
+
+
+def test_the_count_is_written_again_only_when_its_time_has_come(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clock the test moves. Sixty seconds between one writing of the count and the
+    next, counted from the last time it was written."""
+    now = [WHEN]
+    monkeypatch.setattr(time, "time", lambda: now[0])
+    status = capture.Status(tmp_path, every=60)
+    gate = capture.Gate(tmp_path, status=status)
+    status.state("connected")
+
+    now[0] += 30
+    passed(gate, clicks(1))
+    assert report(tmp_path).endswith(" 0 events.")  # thirty seconds on: not yet
+
+    now[0] += 31
+    passed(gate, clicks(1))
+    assert report(tmp_path).endswith(" 2 events, the last at 2026-11-20T09:15:00.")
+
+    now[0] += 39  # a hundred since the start, and thirty-nine since the count was written
+    passed(gate, clicks(1))
+    assert report(tmp_path).endswith(" 2 events, the last at 2026-11-20T09:15:00.")
+
+    status.flush()
+    assert report(tmp_path).endswith(" 3 events, the last at 2026-11-20T09:15:00.")
+
+
+def test_the_reason_of_a_state_is_written_with_it(tmp_path: Path) -> None:
+    capture.Status(tmp_path).state("down", "nothing listens on 9")
+
+    said = report(tmp_path)
+
+    assert said.startswith("Capture is down since ")
+    assert said.endswith(
+        ": nothing listens on 9."
+        " Is remote debugging on in Chrome? chrome://inspect/#remote-debugging"
+    )
+
+
+def test_what_is_not_written_is_not_counted(tmp_path: Path) -> None:
+    """An event the schedule refuses, and one that cannot be written, are not events
+    written. 21 November 2026 is a Saturday."""
+    status = capture.Status(tmp_path)
+    gate = capture.Gate(tmp_path, status=status)
+    status.state("connected")
+
+    passed(gate, clicks(2, first="2026-11-21T09:15:00"))
+    (tmp_path / "watch" / "activity-20261120.jsonl").mkdir()  # a folder where the file is
+    with pytest.raises(OSError):
+        gate(clicks(1)[0])
+
+    assert status.events == 0

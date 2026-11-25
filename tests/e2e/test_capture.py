@@ -7,9 +7,12 @@ never touch the user's Chrome: looking up its address fails loudly in the fixtur
 Run them with:  .venv/bin/python -m pytest -m e2e
 """
 
+import json
+import os
 import threading
 import time
 from collections.abc import Callable, Iterator
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -18,7 +21,7 @@ import pytest
 from seeress import activity, bodies, capture
 from seeress.errors import CaptureError
 
-from .cdp import Browser, until
+from .cdp import Browser, Tab, until
 from .conftest import client_body
 
 pytestmark = pytest.mark.e2e
@@ -619,3 +622,244 @@ def test_the_title_of_a_page_is_nowhere_in_what_the_capture_wrote(
     assert TITLE not in written
     assert QUERY not in written
     nothing_of(TYPED, written)
+
+
+# ------------------------------------------------------ what is kept, and the status ---
+
+
+def said(home: Path) -> dict[str, object]:
+    """What the capture last said of itself under this home, and nothing before it has."""
+    try:
+        found: dict[str, object] = json.loads(
+            (home / "watch" / "capture-status.json").read_text(encoding="utf-8")
+        )
+        return found
+    except (OSError, ValueError):
+        return {}
+
+
+def a_click_on(day: str) -> activity.Event:
+    """A click at ten in the morning of that day, as 2026-10-25."""
+    return activity.Event(1, f"{day}T10:00:00", "click", "example.org", "/", "1A2B3C4D", None)
+
+
+def clicked_until_counted(tab: Tab, home: Path) -> int:
+    """Click until the capture counts one, as the listener may not be in at the first.
+    Returns how many clicks were made: one more may be in hand when the first is counted."""
+    made = 0
+
+    def a_click() -> object:
+        nonlocal made
+        tab.click('[data-testid="save"]')
+        made += 1
+        return said(home).get("events")
+
+    until(a_click, "the capture to count a click", 10)
+    return made
+
+
+def test_a_capture_on_an_address_where_nothing_listens_says_it_is_down_and_why(
+    home: Path,
+) -> None:
+    recorder = capture.Recorder(
+        "ws://127.0.0.1:9/devtools/browser/none", lambda event: None, status=capture.Status(home)
+    )
+    recorder.start()
+    try:
+        until(lambda: recorder.error, "the error of a capture that could not connect", 10)
+    finally:
+        recorder.stop()
+
+    report = capture.status(home)
+
+    assert report.startswith("Capture is down since ")
+    assert "ConnectionRefusedError" in report
+    assert report.endswith("Is remote debugging on in Chrome? chrome://inspect/#remote-debugging")
+
+
+def test_a_capture_that_is_recording_says_since_when_and_what_it_has_written(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """The count is written as the events come here, so that the test need not wait: every
+    is nothing. The schedule is the whole day, whatever the hour the test runs at."""
+    own, address = browser
+    status = capture.Status(home, every=0)
+    gate = capture.Gate(home, schedule=activity.Schedule(frozenset(range(7)), 0, 23), status=status)
+    recorder = capture.Recorder(address, gate, status=status)
+    recorder.start()
+    tab = own.tab(f"{site}/")
+    try:
+        until(lambda: said(home).get("state") == "connected", "the capture to be recording", 10)
+        since = said(home)["since"]
+        tab.wait_loaded()
+        made = clicked_until_counted(tab, home)
+        until(lambda: said(home)["events"] == made, "every click to be counted", 10)
+        count, last = said(home)["events"], said(home)["last_event"]
+        events = activity.read_events(home)
+        recording = capture.status(home)
+    finally:
+        tab.close()
+        recorder.stop()
+
+    assert len(events) == count
+    assert events[-1].ts == last
+    assert recording == (
+        f"Capture is recording since {since} (pid {os.getpid()}):"
+        f" {count} event{'' if count == 1 else 's'}, the last at {last}."
+    )
+    assert recorder.error is None
+    assert capture.status(home) == (
+        f"Capture is not running. It last reported stopped at {said(home)['since']}."
+    )
+
+
+def test_what_is_kept_is_done_as_soon_as_the_capture_connects_and_then_not_at_once(
+    home: Path, browser: tuple[Browser, str]
+) -> None:
+    """Again comes every so often: after an hour by default, and not before."""
+    kept: list[int] = []
+    recorder = capture.Recorder(browser[1], lambda event: None, keep=lambda: kept.append(len(kept)))
+    recorder.start()
+    try:
+        until(lambda: kept, "what is kept to be done as the capture connects", 10)
+        time.sleep(0.3)
+    finally:
+        recorder.stop()
+
+    assert kept == [0]
+    assert recorder.error is None
+
+
+def test_what_is_kept_is_done_again_every_so_often(
+    home: Path, browser: tuple[Browser, str]
+) -> None:
+    kept: list[int] = []
+    recorder = capture.Recorder(
+        browser[1], lambda event: None, keep=lambda: kept.append(len(kept)), every=0.05
+    )
+    recorder.start()
+    try:
+        until(lambda: len(kept) >= 3, "what is kept to be done again and again", 10)
+    finally:
+        recorder.stop()
+
+    assert kept[:3] == [0, 1, 2]
+    assert recorder.error is None
+
+
+def test_what_is_past_the_days_kept_is_deleted_as_the_capture_connects(
+    home: Path, browser: tuple[Browser, str]
+) -> None:
+    """Thirty days are kept, and today is 25 November 2026. A click of 26 October is thirty
+    days old and stays; one of 25 October is older and goes."""
+    old = activity.write_event(
+        home, a_click_on("2026-10-25"), now=activity.epoch("2026-10-25T10:00:00")
+    )
+    kept = activity.write_event(
+        home, a_click_on("2026-10-26"), now=activity.epoch("2026-10-26T10:00:00")
+    )
+
+    def keep() -> None:
+        capture.retention(home, 30, today=date(2026, 11, 25))
+
+    recorder = capture.Recorder(browser[1], lambda event: None, keep=keep)
+    recorder.start()
+    try:
+        until(lambda: not old.exists(), "what is past the days kept to be deleted", 10)
+    finally:
+        recorder.stop()
+
+    assert kept.exists()
+    assert recorder.error is None
+
+
+def test_a_fault_of_the_capture_s_own_is_kept_and_said(
+    home: Path, browser: tuple[Browser, str], site: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What is not one of the capture's errors is a fault. It is kept as the error of the
+    capture and nothing is raised on the thread, and the status says the capture failed,
+    and why."""
+    own, address = browser
+    raised: list[object] = []
+    monkeypatch.setattr(threading, "excepthook", raised.append)
+
+    def a_fault(event: activity.Event) -> None:
+        raise RuntimeError("a fault of the capture's own")
+
+    recorder = capture.Recorder(address, a_fault, status=capture.Status(home))
+    recorder.start()
+    tab = own.tab(f"{site}/")
+    try:
+        tab.wait_loaded()
+
+        def a_click() -> RuntimeError | None:
+            tab.click('[data-testid="save"]')
+            error = recorder.error
+            return error if isinstance(error, RuntimeError) else None
+
+        until(a_click, "the fault to be kept as the error of the capture", 10)
+    finally:
+        tab.close()
+        recorder.stop()
+
+    assert raised == []  # nothing raised on the thread
+    assert str(recorder.error) == "a fault of the capture's own"
+    assert capture.status(home) == (
+        f"Capture is not running. It last reported failed at {said(home)['since']}:"
+        " RuntimeError: a fault of the capture's own."
+    )
+
+
+def test_a_status_that_cannot_be_written_hides_no_error(home: Path) -> None:
+    """The folder of the record is a file here, so nothing can be said. What ended the
+    capture is the error raised all the same, and not the failure to say it."""
+    (home / "watch").write_text("a file where the folder should be", encoding="utf-8")
+    recorder = capture.Recorder(
+        "ws://127.0.0.1:9/devtools/browser/none", lambda event: None, status=capture.Status(home)
+    )
+    recorder.start()
+    try:
+        until(lambda: recorder.error, "the error of a capture that could not connect", 10)
+    finally:
+        recorder.stop()
+
+    assert type(recorder.error).__name__ == "ConnectionRefusedError"
+
+
+def test_a_failure_of_what_is_kept_ends_the_capture_and_says_why(
+    home: Path, browser: tuple[Browser, str]
+) -> None:
+    """What keeps the record is done on the loop of the capture. A failure there is not
+    hidden: the capture ends with it, and the status says why."""
+
+    def keep() -> None:
+        raise OSError("the record could not be deleted")
+
+    recorder = capture.Recorder(
+        browser[1], lambda event: None, keep=keep, status=capture.Status(home)
+    )
+    recorder.start()
+    try:
+        until(lambda: recorder.error, "the error of what could not be kept", 10)
+    finally:
+        recorder.stop()
+
+    report = capture.status(home)
+    assert str(recorder.error) == "the record could not be deleted"
+    assert report.startswith("Capture is down since ")
+    assert "OSError: the record could not be deleted" in report
+
+
+def test_nothing_is_kept_by_a_capture_that_cannot_connect(home: Path) -> None:
+    """What is kept is done once the capture has connected, and not before."""
+    kept: list[int] = []
+    recorder = capture.Recorder(
+        "ws://127.0.0.1:9/devtools/browser/none", lambda event: None, keep=lambda: kept.append(0)
+    )
+    recorder.start()
+    try:
+        until(lambda: recorder.error, "the error of a capture that could not connect", 10)
+    finally:
+        recorder.stop()
+
+    assert kept == []

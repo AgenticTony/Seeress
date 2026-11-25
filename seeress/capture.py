@@ -14,6 +14,11 @@ page can say what site it is on.
 Before an event is written it passes a gate: only in the schedule, and no more than two
 hundred a minute from one tab. What is refused is counted and not written.
 
+The record is kept for a number of days and no longer: retention deletes the files of
+the capture whose day is past them, and touches no other file. And the capture says of
+itself, in one file, whether it is recording and since when, or why it is not: status
+reads that file.
+
 Nothing here looks for a browser. The capture takes an address, and whose browser is behind
 it is for the caller to know. This module starts nothing on anyone's browser.
 """
@@ -21,10 +26,14 @@ it is for the caller to know. This module starts nothing on anyone's browser.
 import asyncio
 import contextlib
 import json
+import os
+import re
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, TypeGuard
 from urllib.parse import urlsplit
@@ -49,6 +58,14 @@ WORLD = "seeress"
 
 # The most the browser may say in one message, as the spike logger allows.
 MOST_AT_ONCE = 2**22
+
+# What the capture says of itself, for capture-status to read.
+STATUS_FILE = "capture-status.json"
+
+# How often the record is kept short again, and how long a count of events may wait
+# before it is written.
+HOURLY = 3600.0
+STATUS_EVERY = 60.0
 
 # What runs in every tab. It is a raw string, so the backslashes of its regular expressions
 # are its own: a raw string has no continued lines, and the first line is the first line.
@@ -526,6 +543,242 @@ class Sessions:
             self._emit(event)
 
 
+# ------------------------------------------------- what is kept, and the status ---
+
+# A file of the record that the capture wrote, by the day it was written on.
+HELD = re.compile(r"activity-(\d{8})\.jsonl")
+
+
+def retention(home: Path, keep_days: int, *, today: date | None = None) -> list[Path]:
+    """Delete the files of the capture whose day is more than keep_days before today.
+
+    A file of the record is named for the day it was written on. One of keep_days days
+    before today, to the day, is kept; one of a day before that goes. Returns what was
+    deleted, its oldest day first. Only activity-YYYYMMDD.jsonl in the folder of the
+    record is looked at: the spike logger's files, and every other file there, are not
+    touched. Where there is no record nothing is made, and nothing is done. Today is the
+    machine's when none is given.
+
+    Raises OSError when a file cannot be deleted. Nothing is hidden: the capture ends with
+    the error.
+    """
+    oldest_kept = (date.today() if today is None else today) - timedelta(days=keep_days)
+    deleted: list[Path] = []
+    for path in sorted((home / "watch").glob("activity-*.jsonl")):
+        found = HELD.fullmatch(path.name)
+        if found is None:
+            continue
+        try:
+            written = date(int(found[1][:4]), int(found[1][4:6]), int(found[1][6:]))
+        except ValueError:  # eight digits that are no day: not the capture's to judge
+            continue
+        if written < oldest_kept:
+            path.unlink()
+            deleted.append(path)
+    return deleted
+
+
+async def hourly(keep: Callable[[], None], every: float, stop: asyncio.Event) -> None:
+    """Do what keeps the record short now, and again every so often, until stop is set.
+
+    keep runs on the loop of the capture, between its messages: it holds the capture for as
+    long as it takes and no longer. An error of keep's is not caught here. It ends this,
+    and the capture with it.
+    """
+    while not stop.is_set():
+        keep()
+        # The time came and the stop did not: that is the wait, over.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), every)
+
+
+def write_status(
+    home: Path,
+    state: str,
+    reason: str | None,
+    *,
+    events: int,
+    last_event: str | None,
+    now: float | None = None,
+) -> None:
+    """Say of the capture, in one file under home, what it is and what it has written.
+
+    The file is home/watch/capture-status.json, for the user alone, and it replaces what
+    was there whole: a reader finds one report or the other, never half of one. It holds
+    the process, the state, the reason if one is given, since when the state is what it is,
+    how many events were written and when the last was. Since stays while the state stays
+    the same in the same process: a report that changes nothing does not move it. A new
+    process, or a new state, starts again from now, which is the machine's when none is
+    given.
+
+    Raises OSError when the file cannot be written.
+    """
+    when = time.time() if now is None else now
+    since = activity.clock(when)
+    before = _report(home)
+    if before is not None and before["state"] == state and before["pid"] == os.getpid():
+        since = before["since"]
+    said = {
+        "pid": os.getpid(),
+        "state": state,
+        "reason": reason,
+        "since": since,
+        "events": events,
+        "last_event": last_event,
+    }
+    watch = home / "watch"
+    watch.mkdir(mode=activity.PRIVATE, parents=True, exist_ok=True)
+    path = watch / STATUS_FILE
+    pending = path.with_name(f"{path.name}.new")
+    opened = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, activity.PRIVATE_FILE)
+    with os.fdopen(opened, "w", encoding="utf-8") as stream:
+        stream.write(json.dumps(said) + "\n")
+    os.replace(pending, path)
+
+
+def _report(home: Path) -> dict[str, Any] | None:
+    """What the status file says, or None when it is no report.
+
+    A report holds every field of its kind, and its times are times. A capture that is
+    down says why. Anything else, a file that cannot be read included, says nothing.
+    """
+    try:
+        said = json.loads((home / "watch" / STATUS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(said, dict):
+        return None
+    state, pid, reason = said.get("state"), said.get("pid"), said.get("reason")
+    since, events, last = said.get("since"), said.get("events"), said.get("last_event")
+    if not (
+        isinstance(state, str)
+        and isinstance(since, str)
+        and (reason is None or isinstance(reason, str))
+        and type(pid) is int  # not a bool: true is no process
+        and pid > 0
+        and type(events) is int
+        and events >= 0
+    ):
+        return None
+    try:
+        epoch(since)
+        if last is not None:
+            epoch(last)
+    except (TypeError, ValueError):  # a time that is no time
+        return None
+    if state == "down" and reason is None:
+        return None
+    return said
+
+
+def _alive(pid: int) -> bool:
+    """Whether a process of that number is running, as this system says.
+
+    Where a signal of zero is a question, it asks and does nothing else. A process this
+    user may not signal is running all the same. It is not asked on Windows: there a zero
+    signal is no question but an order to end the process.
+    """
+    if sys.platform == "win32":
+        raise NotImplementedError("Whether a process is running is not asked on Windows.")
+    if pid <= 0:  # a group of processes, or nothing: no process to find
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # running, though not this user's to signal
+    return True
+
+
+def status(home: Path, *, alive: Callable[[int], bool] = _alive) -> str:
+    """What the capture says of itself under home, in a line for a person.
+
+    With no report the capture has never run here. While its process lives, a capture that
+    is recording says since when and how much, and one that is down says since when and
+    why. Any other report, and any report whose process is gone, says the capture is not
+    running, and what it last said.
+    """
+    said = _report(home)
+    if said is None:
+        return "Capture has never run here."
+    state, since, reason = said["state"], said["since"], said["reason"]
+    pid = said["pid"]
+    if alive(pid):
+        if state == "connected":
+            last = said["last_event"]
+            count = f"{said['events']} event" + ("" if said["events"] == 1 else "s")
+            if last is not None:
+                count += f", the last at {last}"
+            return f"Capture is recording since {since} (pid {pid}): {count}."
+        if state == "down":
+            return (
+                f"Capture is down since {since}: {reason}."
+                " Is remote debugging on in Chrome? chrome://inspect/#remote-debugging"
+            )
+    last = f"It last reported {state} at {since}"
+    if reason is not None:
+        last += f": {reason}"
+    return f"Capture is not running. {last}."
+
+
+class Status:
+    """What the capture says of itself, as it goes.
+
+    state() is written at once: a change of the capture is news now. An event that passes
+    the gate only counts. The count is written when its turn has come, every so often, and
+    whenever the state is written: a file for every click would be a second record.
+    """
+
+    def __init__(self, home: Path, *, every: float = STATUS_EVERY) -> None:
+        self._home = home
+        self._every = every
+        self._state: str | None = None
+        self._reason: str | None = None
+        self._flushed = time.time()
+        self.events = 0
+        self.last_event: str | None = None
+
+    def state(self, state: str, reason: str | None = None) -> None:
+        """The capture is in this state, for this reason if one is given. Written at once,
+        with what has been counted so far."""
+        self._state, self._reason = state, reason
+        self.flush()
+
+    def written(self, event: Event) -> None:
+        """One event has passed the gate and been written: counted, and the count written
+        when its turn has come."""
+        self.events += 1
+        self.last_event = event.ts
+        if time.time() - self._flushed >= self._every:
+            self.flush()
+
+    def flush(self) -> None:
+        """Write the count with the state the capture is in. Nothing before a state."""
+        if self._state is not None:
+            write_status(
+                self._home,
+                self._state,
+                self._reason,
+                events=self.events,
+                last_event=self.last_event,
+            )
+        self._flushed = time.time()
+
+
+def _reason(error: BaseException) -> str:
+    """Why the capture ended: the name of the error, and its words."""
+    return f"{type(error).__name__}: {error}"
+
+
+def _ended(status: Status | None, state: str, reason: str) -> None:
+    """The capture ended, and why. A status that cannot be written hides nothing: the
+    error that ended the capture is the error raised all the same."""
+    if status is not None:
+        with contextlib.suppress(OSError):
+            status.state(state, reason)
+
+
 # ------------------------------------------------------------------------- the gate ---
 
 
@@ -541,12 +794,16 @@ class Gate:
 
     An event passes in this order, and the first rule that refuses it wins: the schedule,
     then the cap for its tab. The address of the tab has been judged before, when the event
-    was made. What passes is written with write_event, for the user alone.
+    was made. What passes is written with write_event, for the user alone, and told to
+    the status when one is given.
     """
 
-    def __init__(self, home: Path, *, schedule: Schedule = DEFAULT_SCHEDULE) -> None:
+    def __init__(
+        self, home: Path, *, schedule: Schedule = DEFAULT_SCHEDULE, status: Status | None = None
+    ) -> None:
         self._home = home
         self._schedule = schedule
+        self._status = status
         # A tab: when its window opened, and how many of its events passed in it.
         self._windows: dict[str, tuple[float, int]] = {}
         self.written = 0
@@ -568,13 +825,21 @@ class Gate:
             return
         write_event(self._home, event, now=when)
         self.written += 1
+        if self._status is not None:
+            self._status.written(event)
 
 
 # ----------------------------------------------------------------- the connection ---
 
 
 async def watch(
-    address: str, emit: Callable[[Event], None], *, stop: asyncio.Event | None = None
+    address: str,
+    emit: Callable[[Event], None],
+    *,
+    stop: asyncio.Event | None = None,
+    keep: Callable[[], None] | None = None,
+    every: float = HOURLY,
+    status: Status | None = None,
 ) -> None:
     """Listen to every tab of the browser at address until stop is set.
 
@@ -583,30 +848,71 @@ async def watch(
     error it got, and trying again is left to the caller. Only tabs of the browser's default
     context are listened to, so a private window is never captured. Nothing here is written:
     emit does the writing, and what it is given holds a site and a path, and no query.
+
+    keep is done once the connection is made, and again every so often: what keeps the
+    record short. A capture that cannot connect keeps nothing. An error of keep's ends
+    the capture with it.
+
+    status is told "connected" when the browser has answered its first command, "down" and
+    the reason when the connection ends with an error, "failed" and the reason on a fault
+    of the capture's own, and "stopped" when it ends as it was asked to. A status that
+    cannot be written hides none of these: the error that ended the capture is raised.
     """
     sessions = Sessions(emit)
     ended = asyncio.Event() if stop is None else stop
-    async with connect(address, max_size=MOST_AT_ONCE, proxy=None) as socket:
-        for command in sessions.opens():
-            await socket.send(json.dumps(command))
-        stopping = asyncio.create_task(ended.wait())
-        try:
-            while not ended.is_set():
-                receiving = asyncio.ensure_future(socket.recv())
-                done, _ = await asyncio.wait(
-                    {receiving, stopping}, return_when=asyncio.FIRST_COMPLETED
-                )
-                if receiving not in done:
-                    receiving.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await receiving
-                    return
-                for command in sessions.hears(json.loads(receiving.result()), time.time()):
-                    await socket.send(json.dumps(command))
-        finally:
-            stopping.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stopping
+    keeping: asyncio.Task[None] | None = None  # once the browser has let the capture in
+    answered = False
+    try:
+        async with connect(address, max_size=MOST_AT_ONCE, proxy=None) as socket:
+            if keep is not None:
+                keeping = asyncio.create_task(hourly(keep, every, ended))
+            for command in sessions.opens():
+                await socket.send(json.dumps(command))
+            stopping = asyncio.create_task(ended.wait())
+            try:
+                while not ended.is_set():
+                    receiving = asyncio.ensure_future(socket.recv())
+                    waiting = (
+                        {receiving, stopping}
+                        if keeping is None
+                        else {
+                            receiving,
+                            stopping,
+                            keeping,
+                        }
+                    )
+                    done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+                    if keeping is not None and keeping in done:
+                        await keeping  # what keeps the record failed, if it did: so does this
+                    if receiving not in done:
+                        receiving.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await receiving
+                        break  # stopped, as asked
+                    message = json.loads(receiving.result())
+                    for command in sessions.hears(message, time.time()):
+                        await socket.send(json.dumps(command))
+                    named = isinstance(message, Mapping) and "id" in message
+                    if status is not None and not answered and named:
+                        answered = True  # the browser has answered its first command
+                        status.state("connected")
+            finally:
+                stopping.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stopping
+    except (OSError, WebSocketException, CaptureError) as error:
+        _ended(status, "down", _reason(error))
+        raise
+    except BaseException as error:  # a fault of the capture's own: said, and not swallowed
+        _ended(status, "failed", _reason(error))
+        raise
+    else:
+        if status is not None:
+            status.state("stopped")
+    finally:
+        ended.set()
+        if keeping is not None:
+            await keeping
 
 
 class Recorder:
@@ -615,12 +921,26 @@ class Recorder:
     start() runs watch on a thread of its own and returns at once. stop() ends it, and
     returns only when the thread has ended. It may be called before start(), and more than
     once. When watch ends with an error, the thread ends and the error is kept in `error`,
-    where the caller finds it: nothing is printed, and nothing is raised on a thread.
+    where the caller finds it: nothing is printed, and nothing is raised on a thread. A
+    fault of the capture's own is kept there the same way.
+
+    keep, every and status are given to watch.
     """
 
-    def __init__(self, address: str, emit: Callable[[Event], None]) -> None:
+    def __init__(
+        self,
+        address: str,
+        emit: Callable[[Event], None],
+        *,
+        keep: Callable[[], None] | None = None,
+        every: float = HOURLY,
+        status: Status | None = None,
+    ) -> None:
         self._address = address
         self._emit = emit
+        self._keep = keep
+        self._every = every
+        self._status = status
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -659,9 +979,20 @@ class Recorder:
         self._loop, self._stop = loop, asyncio.Event()
         self._ready.set()
         try:
-            loop.run_until_complete(watch(self._address, self._emit, stop=self._stop))
-        except (OSError, WebSocketException, CaptureError) as error:
-            # The browser could not be reached, or it is Seeress's own, or it could not say.
+            loop.run_until_complete(
+                watch(
+                    self._address,
+                    self._emit,
+                    stop=self._stop,
+                    keep=self._keep,
+                    every=self._every,
+                    status=self._status,
+                )
+            )
+        except Exception as error:
+            # The browser could not be reached, or it is Seeress's own, or it could not
+            # say; or the record could not be written or kept; or a fault of the capture's
+            # own. Kept for the caller, and nothing raised on a thread.
             self._error = error
         finally:
             loop.close()
