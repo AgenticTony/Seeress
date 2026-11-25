@@ -327,8 +327,16 @@ def targets(*open: dict[str, Any]) -> dict[str, Any]:
 
 
 def cookies(*names: str) -> dict[str, Any]:
-    """The answer to the fourth command: which cookies the browser holds, by name."""
-    return {"cookies": [{"name": name, "value": "x", "domain": "d"} for name in names]}
+    """The answer to the fourth command: which cookies the browser holds, by name. Each is
+    held for the marker's own site, as the marker itself is."""
+    return {
+        "cookies": [{"name": name, "value": "x", "domain": "seeress.invalid"} for name in names]
+    }
+
+
+def a_cookie_of(site: str, name: str) -> dict[str, Any]:
+    """A cookie a page of that site set, as the browser tells it."""
+    return {"name": name, "value": "1", "domain": site, "path": "/"}
 
 
 def created(about: dict[str, Any]) -> dict[str, Any]:
@@ -480,6 +488,77 @@ def test_a_browser_that_carries_the_marker_is_attached_to_nothing_and_the_captur
     assert sessions.listened == frozenset()
     assert sessions.hears(created(info(T2, url="https://two.example/b")), WHEN) == []
     assert sessions.hears(answer(contexts_id, contexts()), WHEN) == []
+
+
+def test_a_cookie_named_as_the_marker_of_another_site_is_no_marker() -> None:
+    """A page may name a cookie of its own site as the marker is named. The marker is set at
+    seeress.invalid and nowhere else. Before, any cookie so named ended the capture, and a
+    logger on a person's own Chrome tried again every five seconds, and ended again."""
+    sessions = capture.Sessions(lambda event: None)
+    contexts_id, targets_id, _, cookies_id = (command["id"] for command in sessions.opens())
+    sent: list[dict[str, Any]] = []
+    sent += sessions.hears(answer(contexts_id, contexts()), WHEN)
+    sent += sessions.hears(answer(targets_id, targets(info(), info(T2))), WHEN)
+    third = created(info("ABCDEFABCDEFABCDEFABCDEFABCDEFAB"))
+    assert sent + sessions.hears(third, WHEN) == []  # three tabs are held
+
+    sent = sessions.hears(
+        answer(
+            cookies_id,
+            {
+                "cookies": [
+                    a_cookie_of("example.com", "seeress_body"),
+                    a_cookie_of("seeress.invalid", "other"),
+                ]
+            },
+        ),
+        WHEN,
+    )
+
+    assert [command["method"] for command in sent] == ["Target.attachToTarget"] * 3
+
+
+def test_a_site_that_ends_with_the_marker_s_is_not_the_marker_s() -> None:
+    """The marker's site is the whole of it, not its tail."""
+    sessions = capture.Sessions(lambda event: None)
+    contexts_id, targets_id, _, cookies_id = (command["id"] for command in sessions.opens())
+    sent: list[dict[str, Any]] = []
+    sent += sessions.hears(answer(contexts_id, contexts()), WHEN)
+    sent += sessions.hears(answer(targets_id, targets(info(), info(T2))), WHEN)
+    sent += sessions.hears(created(info("ABCDEFABCDEFABCDEFABCDEFABCDEFAB")), WHEN)
+    assert sent == []  # three tabs are held
+
+    sent = sessions.hears(
+        answer(cookies_id, {"cookies": [a_cookie_of("notseeress.invalid", "seeress_body")]}),
+        WHEN,
+    )
+
+    assert [command["method"] for command in sent] == ["Target.attachToTarget"] * 3
+
+
+@pytest.mark.parametrize(
+    "odd",
+    [
+        {"value": "x", "domain": "seeress.invalid"},  # no name
+        {"name": "seeress_body"},  # no site
+        {"name": "seeress_body", "domain": 1},  # a site that is not text
+        "seeress_body",  # not a cookie
+    ],
+)
+def test_a_cookie_that_cannot_be_read_makes_the_answer_unreadable(odd: object) -> None:
+    """A cookie with no name or no site, as text, cannot be told from the marker. A check
+    that could not be made is no check: nothing in that browser is captured."""
+    sessions = capture.Sessions(lambda event: None)
+    contexts_id, _, _, cookies_id = (command["id"] for command in sessions.opens())
+    sessions.hears(answer(contexts_id, contexts()), WHEN)
+    sessions.hears(created(info()), WHEN)
+
+    with pytest.raises(CaptureError, match="could not be read"):
+        sessions.hears(
+            answer(cookies_id, {"cookies": [a_cookie_of("seeress.invalid", "other"), odd]}), WHEN
+        )
+
+    assert sessions.hears(created(info(T2)), WHEN) == []
 
 
 def test_a_browser_whose_cookies_cannot_be_read_is_attached_to_nothing() -> None:

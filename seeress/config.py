@@ -92,6 +92,16 @@ BU_CLI = os.path.join(os.path.dirname(sys.executable), "browser-use")
 
 CHROME_PORT_FILE = Path("Library/Application Support/Google/Chrome/DevToolsActivePort")
 
+# The marker by which Seeress knows a browser for its own. It is a cookie of this name,
+# planted at this address and nowhere else, with a value only the door that planted it
+# knows. A browser that carries it is one Seeress started for a door, and nothing in it is
+# a person's work. `seeress.bodies` plants it and asks for it. `seeress.capture` looks
+# for it by name and site together: a page may name a cookie of its own site as the marker
+# is named, and that is no marker.
+MARKER_URL = "http://seeress.invalid/"
+MARKER_KEY = "seeress_body"
+MARKER_HOST = "seeress.invalid"
+
 _HOSTNAME = re.compile(
     r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
     r"(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.?$"

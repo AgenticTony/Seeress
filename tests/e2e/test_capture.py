@@ -618,6 +618,36 @@ def test_the_capture_takes_no_notice_of_any_cookie_but_the_marker(
 # ---------------------------------------------------- what is kept of nothing ---
 
 
+def test_a_cookie_a_page_sets_with_the_marker_s_name_is_no_marker(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """A page may name a cookie of its own site as the marker is named. The marker is set at
+    seeress.invalid and nowhere else. Before, any cookie so named ended the capture, and a
+    logger on a person's own Chrome tried again every five seconds, and ended again."""
+    own, address = browser
+    tab = own.tab(f"{site}/")
+    recording: Recording | None = None
+    try:
+        tab.wait_loaded()
+        tab.run("document.cookie = 'seeress_body=1; Max-Age=31536000; Path=/'")
+        recording = record_on(home, address)
+        listened(tab)
+        tab.click('[data-testid="save"]')
+        heard = until(
+            lambda: recording.of_kind("click") or recording.recorder.error,
+            "a click in the page, with such a cookie in the jar",
+            10,
+        )
+    finally:
+        tab.close()
+        if recording is not None:
+            recording.stop()
+
+    assert recording.recorder.error is None, recording.recorder.error
+    assert len(heard) == 1  # the click was recorded: the capture went on
+    assert recording.events() == heard
+
+
 def test_the_title_of_a_page_is_nowhere_in_what_the_capture_wrote(
     home: Path, browser: tuple[Browser, str], site: str
 ) -> None:

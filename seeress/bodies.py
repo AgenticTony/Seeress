@@ -33,9 +33,11 @@ from . import config, env
 from .errors import BrowserError, ConfigError, IsolationError
 from .runner import run_browser_command, run_browser_tool
 
-MARKER_URL = "http://seeress.invalid/"
-MARKER_KEY = "seeress_body"
-MARKER_EXPIRES = 4102444800  # 2100-01-01: the marker outlives restarts of the browser
+MARKER_URL = config.MARKER_URL
+MARKER_KEY = config.MARKER_KEY
+# Asked for as 2100-01-01. The browser keeps a cookie for 400 days at most (found on a real
+# browser on 2026-11-25), which outlasts many a restart of it.
+MARKER_EXPIRES = 4102444800
 PROBE_TAG = "SEERESS_PROBE "
 PROBE_TIMEOUT = 60.0
 RELOAD_TIMEOUT = 60.0

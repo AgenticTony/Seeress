@@ -52,10 +52,11 @@ from . import activity, config, log
 from .activity import DEFAULT_SCHEDULE, Event, Schedule, due, epoch, write_event
 from .errors import CaptureError, SeeressError
 
-# The cookie by which Seeress knows a browser for its own. A browser that carries it is one
-# Seeress started for a door, and nothing in it is a person's work. The name is
-# `MARKER_KEY` in seeress/bodies.py, and a test holds the two together.
-MARKER = "seeress_body"
+# The cookie by which Seeress knows a browser for its own, named once with the door that
+# plants it. A browser that carries it is one Seeress started for a door, and nothing in it
+# is a person's work.
+MARKER = config.MARKER_KEY
+MARKER_SITE = config.MARKER_HOST
 
 # What the listener reports through, and the world of the page it runs in. A world of its own
 # keeps the binding and the listener out of the reach of the page's own scripts: a page can
@@ -457,19 +458,25 @@ class Sessions:
         return []
 
     def _cookies_named(self, result: Mapping[str, Any]) -> list[dict[str, Any]]:
-        """The browser has said which cookies it holds. A cookie with the marker's name says
-        that it is Seeress's own: nothing in it is attached, and the capture ends. Otherwise
-        the tabs held until now may be attached. The names are looked at and nothing is kept."""
+        """The browser has said which cookies it holds. A cookie with the marker's name, held
+        for the marker's site, says that it is Seeress's own: nothing in it is attached,
+        and the capture ends. The name alone is not enough: a page may name a cookie of its
+        own site as the marker is named, and before the site was looked at too, that ended
+        the capture for good. Otherwise the tabs held until now may be attached. The names
+        and the sites are looked at, and nothing is kept."""
         if self._no_marker:
             return []  # it is asked of once, at the start
         held = result.get("cookies", [])
-        if not isinstance(held, list):
+        if not isinstance(held, list) or not _cookies_readable(held):
             self._tabs.clear()
             raise CaptureError(
                 "The browser's answer about its cookies could not be read, so nothing in it is"
                 " captured."
             )
-        if any(isinstance(cookie, Mapping) and cookie.get("name") == MARKER for cookie in held):
+        if any(
+            cookie["name"] == MARKER and cookie["domain"].lstrip(".") == MARKER_SITE
+            for cookie in held
+        ):
             self._tabs.clear()
             raise CaptureError(
                 "This browser is Seeress's own: it carries the marker. Nothing in it is captured."
@@ -943,6 +950,17 @@ class Status:
                 last_event=self.last_event,
             )
         self._flushed = time.time()
+
+
+def _cookies_readable(held: list[Any]) -> bool:
+    """Every cookie is an object with a name and a site, both text. Only so can the marker be
+    told from the rest: a cookie that cannot be read may be it."""
+    return all(
+        isinstance(cookie, Mapping)
+        and isinstance(cookie.get("name"), str)
+        and isinstance(cookie.get("domain"), str)
+        for cookie in held
+    )
 
 
 def _reason(error: BaseException) -> str:
