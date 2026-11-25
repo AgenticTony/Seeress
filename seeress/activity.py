@@ -528,9 +528,12 @@ def write_event(home: Path, event: Event, *, now: float | None = None) -> Path:
     when = time.time() if now is None else now
     path = home / "watch" / f"activity-{time.strftime('%Y%m%d', time.localtime(when))}.jsonl"
     path.parent.mkdir(mode=PRIVATE, parents=True, exist_ok=True)
+    line = json.dumps(event.as_dict(), ensure_ascii=False) + "\n"
+    if not _ends_a_line(path):
+        line = "\n" + line
     opened = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, PRIVATE_FILE)
     with os.fdopen(opened, "a", encoding="utf-8") as stream:
-        stream.write(json.dumps(event.as_dict(), ensure_ascii=False) + "\n")
+        stream.write(line)
     return path
 
 
@@ -543,11 +546,31 @@ def note(home: Path, file: str, fields: Mapping[str, object]) -> None:
     try:
         watch = home / "watch"
         watch.mkdir(mode=PRIVATE, parents=True, exist_ok=True)
+        line = json.dumps(dict(fields), ensure_ascii=False) + "\n"
+        if not _ends_a_line(watch / file):
+            line = "\n" + line
         opened = os.open(watch / file, os.O_WRONLY | os.O_CREAT | os.O_APPEND, PRIVATE_FILE)
         with os.fdopen(opened, "a", encoding="utf-8") as stream:
-            stream.write(json.dumps(dict(fields), ensure_ascii=False) + "\n")
+            stream.write(line)
     except OSError:
         return
+
+
+def _ends_a_line(path: Path) -> bool:
+    """Whether the file ends in a newline, or has nothing in it, or is not there.
+
+    A crash or a power loss can cut the last line short. The next line then begins on its
+    own: the cut one is skipped as a line that cannot be read, and one line is lost where
+    two were before, glued together.
+    """
+    try:
+        if path.stat().st_size == 0:
+            return True
+        with path.open("rb") as back:
+            back.seek(-1, os.SEEK_END)
+            return back.read(1) == b"\n"
+    except OSError:  # not there, or its end cannot be read
+        return True
 
 
 def note_agent_run(home: Path, start: float, end: float, what: str, name: str | None) -> None:

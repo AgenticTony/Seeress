@@ -1158,3 +1158,35 @@ def test_a_long_path_of_the_older_logger_is_cut_as_the_capture_cuts_one(tmp_path
     (event,) = activity.read_events(tmp_path)
 
     assert event.path == "/" + "a" * 2047
+
+
+def test_an_event_after_a_line_cut_short_lands_on_its_own_line(tmp_path: Path) -> None:
+    """A crash or a power loss can cut the last line of a day's file short, with no newline at
+    its end. Before, the next event was glued to it, and both were lost."""
+    path = activity.write_event(tmp_path, click(), now=WRITTEN_AT)
+    whole = path.read_bytes()
+    cut_short = whole[: len(whole) // 2]
+    with path.open("ab") as stream:
+        stream.write(cut_short)
+    after = navigate("two.example.org", "2026-11-20T09:15:06")
+
+    activity.write_event(tmp_path, after, now=WRITTEN_AT)
+
+    line = (json.dumps(after.as_dict(), ensure_ascii=False) + "\n").encode()
+    assert path.read_bytes() == whole + cut_short + b"\n" + line
+    assert activity.read_events(tmp_path) == [click(), after]
+
+
+def test_a_note_after_a_line_cut_short_lands_on_its_own_line(tmp_path: Path) -> None:
+    path = tmp_path / "watch" / "agent-runs.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'{"kind": "run", "ended": 17')  # cut short, as a crash leaves it
+    fields = {"kind": "run", "ended": 18}
+
+    activity.note(tmp_path, "agent-runs.jsonl", fields)
+
+    assert (
+        path.read_bytes()
+        == b'{"kind": "run", "ended": 17\n'
+        + (json.dumps(fields, ensure_ascii=False) + "\n").encode()
+    )

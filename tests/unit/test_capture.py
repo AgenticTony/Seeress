@@ -1963,6 +1963,20 @@ def test_the_review_says_when_only_the_older_logger_holds_a_day(tmp_path: Path) 
     )
 
 
+def test_the_review_counts_a_line_cut_in_the_middle_of_a_character(tmp_path: Path) -> None:
+    """A crash or a power loss can leave half of a character at the end of a day's file.
+    Before, the review died on it, with UnicodeDecodeError, and said nothing of the day."""
+    kept = written(tmp_path, "20261027", "click")
+    with kept.open("ab") as stream:
+        stream.write(b'{"v": 1, "fingerprint": "\xf0\x9f')  # inside an emoji
+
+    (line, last) = capture.review(tmp_path, today=TODAY).splitlines()
+
+    assert line.startswith("2026-10-27   1 event   ")
+    assert line.endswith("   click 1, unreadable 1")
+    assert last.startswith("30 days are kept")
+
+
 def test_forget_names_what_is_before_the_day_and_deletes_nothing_without_a_yes(
     tmp_path: Path,
 ) -> None:

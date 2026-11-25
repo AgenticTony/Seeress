@@ -697,11 +697,13 @@ def review(home: Path | None = None, *, today: date | None = None) -> str:
 def _reviewed(written: date, path: Path) -> str:
     """One line for one day of the record."""
     counts: Counter[str] = Counter()
-    with path.open(encoding="utf-8") as stream:
+    # As bytes: a crash can leave half a character at the end of a file, and read as text
+    # the whole file failed to decode, and the review with it.
+    with path.open("rb") as stream:
         for line in stream:
             try:
                 counts[activity.Event.parse(json.loads(line)).kind] += 1
-            except ValueError:  # not JSON, or not an event
+            except ValueError:  # not text, not JSON, or not an event
                 counts["unreadable"] += 1
     events = sum(count for kind, count in counts.items() if kind != "unreadable")
     count = f"{events} event" + ("" if events == 1 else "s")
