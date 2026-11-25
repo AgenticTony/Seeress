@@ -1,0 +1,139 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seeress"
+version = "0.1.0"
+description = "Employee-private agentic browser: watches repetitive work and compiles it into workflows."
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    # Pinned exactly: the security controls in seeress/env.py and seeress/browser_api.py were
+    # written against this version's source. An upgrade means reading the library again.
+    "browser-use==1.0.6",
+    "websockets==15.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "ruff==0.17.6",
+    "mypy==2.4.1",
+    "import-linter==2.17",
+    "jsonschema==4.26.0",
+    "pre-commit==4.7.0",
+]
+
+[tool.setuptools]
+packages = ["seeress"]
+
+[tool.setuptools.package-data]
+seeress = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+# Flow steps are data: code for the browser tool's own namespace, run by `seeress run`.
+extend-exclude = ["flows"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # import order
+    "B",   # bugbear
+    "UP",  # modern Python
+    "SIM", # simplification
+    "C4",  # comprehensions
+    "PIE", # pointless expressions
+    "RUF", # ruff-specific
+    "G",   # logging format
+    "S",   # bandit-style security
+    "T20", # print and pprint
+]
+ignore = [
+    "S603", # every subprocess call is flagged; the runner passes a list and an allow-listed environment
+]
+
+[tool.ruff.lint.per-file-ignores]
+"seeress/cli.py" = ["T20"]     # the command line writes to the terminal
+"seeress/watcher.py" = [
+    "T20",    # spike logger, replaced in Phase 1
+    "SIM105",
+    "SIM115", # the event file is held open for the life of the process
+    "S607",   # launchctl and osascript are found on PATH by design
+    "RUF001", # the report uses × on purpose
+]
+"tools/*" = ["T20", "S603", "S104"]
+"tests/*" = [
+    "S101",   # asserts are the point of a test
+    "SLF001",
+    "S105",   # dummy values named like secrets
+    "RUF001", # tests assert on the exact characters the code emits
+]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["seeress", "tests", "tools"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+# The modules still carrying unannotated prototype functions. While a module is listed here
+# its unannotated functions are not checked; functions that carry annotations are checked
+# strictly. Each module leaves this list as it is typed in Phase 0. seeress.watcher is
+# replaced in Phase 1.
+module = ["seeress.watcher"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+disallow_untyped_calls = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+# browser-use ships no type information. Its surface Seeress relies on is pinned by contract tests.
+module = ["browser_use.*", "browser_harness.*", "jsonschema"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -m 'not e2e'"
+markers = [
+    "e2e: needs a real browser; not run by default",
+    "git: runs git on a throwaway repository in a temporary folder; may start git and nothing else",
+]
+xfail_strict = true
+
+[tool.importlinter]
+root_package = "seeress"
+# One contract forbids two external packages.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Layers import downward only"
+type = "layers"
+layers = [
+    "seeress.cli",
+    "seeress.flows",
+    "seeress.agent",
+    "seeress.bodies",
+    "seeress.brain | seeress.runner | seeress.browser_api",
+    "seeress.egress",
+    "seeress.env",
+    "seeress.config",
+    "seeress.errors",
+]
+
+[[tool.importlinter.contracts]]
+name = "Seeress never loads the browser tool into its own process"
+type = "forbidden"
+source_modules = ["seeress"]
+forbidden_modules = ["browser_use", "browser_harness"]
+
+[[tool.importlinter.contracts]]
+name = "The logger never imports the browser tooling"
+type = "forbidden"
+source_modules = ["seeress.watcher"]
+forbidden_modules = ["seeress.agent", "seeress.flows", "seeress.cli"]

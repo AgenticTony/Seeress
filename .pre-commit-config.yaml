@@ -1,0 +1,33 @@
+# Installed with:  uv run pre-commit install
+# The local hooks run the tools from the project's own environment (uv sync --frozen).
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.6
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (strict)
+        entry: .venv/bin/mypy
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: lint-imports
+        name: import contracts
+        entry: .venv/bin/lint-imports
+        language: system
+        pass_filenames: false
+        types: [python]

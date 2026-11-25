@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every job uses the interpreter pinned in .python-version and the lock file as committed.
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  static:
+    name: Lint, types and import contracts
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          enable-cache: true
+      - name: Install the pinned interpreter
+        run: uv python install
+      - name: Install from the lock file
+        run: uv sync --frozen
+      - name: Lint
+        run: uv run --frozen ruff check
+      - name: Format
+        run: uv run --frozen ruff format --check
+      - name: Types
+        run: uv run --frozen mypy
+      - name: Import contracts
+        run: uv run --frozen lint-imports
+
+  tests:
+    name: Unit tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          enable-cache: true
+      - name: Install the pinned interpreter
+        run: uv python install
+      - name: Install from the lock file
+        run: uv sync --frozen
+      - name: Unit and contract tests
+        run: uv run --frozen pytest
+      - name: End to end, with a real browser
+        # Starts a headless Chromium on a throwaway profile. Never touches a signed-in browser.
+        run: uv run --frozen pytest -m e2e
+      - name: Egress check
+        # Runs a scripted task through each door against a model on loopback, and records what
+        # every process contacts. Fails on anything but this machine, and fails when its own
+        # instrument has seen nothing.
+        run: uv run --frozen python tools/egress_check.py

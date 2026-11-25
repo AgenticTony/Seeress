@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seeress://contracts/browser-body-probe",
+  "title": "Browser body probe",
+  "description": "What the browser tool reports about the browser behind a door. It prints this object as JSON on the last line of its output, after the tag 'SEERESS_PROBE '. Seeress reads it before any model request: a door only runs a step when the browser proves it is the one the door allows.",
+  "type": "object",
+  "properties": {
+    "daemon": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The name of the daemon the browser tool routed the call to. Each door that owns a browser has its own."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["local", "cdp", "cloud"],
+      "description": "What the daemon reports about itself. 'local': a browser it discovered on this machine. 'cdp': a browser it was attached to by address. 'cloud': a browser in the vendor's cloud. The user's own Chrome and a Chromium of Seeress's own both report 'cdp', which is why the marker exists."
+    },
+    "marker": {
+      "type": ["string", "null"],
+      "description": "The value of the marker cookie for http://seeress.invalid/, or null when there is none or it could not be read. Seeress compares it with the marker it issued for a browser of its own; any marker at all in the browser behind the personal door is a refusal."
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Why the marker could not be read, or null when it could be. A probe with an error never proves anything."
+    }
+  },
+  "required": ["daemon", "kind", "marker", "error"],
+  "additionalProperties": false
+}

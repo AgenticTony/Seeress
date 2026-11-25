@@ -1,0 +1,8 @@
+#!/bin/zsh
+# seeress-client — CLIENT profile: LOCAL ONLY. No cloud API keys are set in this
+# process at all (unset defensively), so client data physically cannot leave the
+# machine even by accident. Brains: Ollama nemotron (fast) / slotstream 125B (hard).
+cd "$(dirname "$0")/.."
+unset ZAI_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY 2>/dev/null
+export SEERESS_PROFILE=client
+exec .venv/bin/python -m seeress.cli "$@"

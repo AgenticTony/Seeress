@@ -1,0 +1,6 @@
+#!/bin/zsh
+# seeress-personal — everyday profile: everyday Chrome, cloud brain allowed (GLM),
+# local Ollama as fallback. No client domains should be visited through this door.
+cd "$(dirname "$0")/.."
+export SEERESS_PROFILE=personal
+exec .venv/bin/python -m seeress.cli "$@"
