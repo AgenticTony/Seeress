@@ -366,7 +366,7 @@ class Sessions:
         if method == "Target.targetCreated":
             return self._told_of(params.get("targetInfo"))
         if method == "Target.targetInfoChanged":
-            self._moved(params.get("targetInfo"))
+            return self._moved(params.get("targetInfo"))
         elif method == "Target.targetDestroyed":
             self._gone(params.get("targetId"))
         elif method == "Runtime.executionContextCreated":
@@ -442,12 +442,15 @@ class Sessions:
         return self._world_made(which, result)
 
     def _refused(self, identifier: int) -> list[dict[str, Any]]:
-        """The browser refused a command, or answered with nothing usable. An attach that was
-        refused drops its tab. Anything else is left: the next document in the tab asks
-        again."""
+        """The browser refused a command, or answered with nothing usable. An attach, a
+        frame tree or a world that was refused drops its tab: deaf without it, and so not
+        counted as listening. The tab may be told of again, and when the browser next tells
+        of it, it is attached again. Before, only an attach did, and a tab whose frame was
+        refused stayed deaf and was counted as listening."""
         waiting = self._pending.pop(identifier, None)
-        if waiting is not None and waiting[0] == "attach":
-            self._tabs.pop(waiting[1], None)
+        if waiting is not None:
+            what, which = waiting
+            self._forget(which if what == "attach" else self._sessions.get(which))
             return []
         asked = self._opening.pop(identifier, None)
         if asked is not None:
@@ -498,7 +501,7 @@ class Sessions:
         session = result.get("sessionId")
         if tab is None or not isinstance(session, str):
             # The tab went away while it was being attached.
-            self._tabs.pop(target, None)
+            self._forget(target)
             return []
         tab.session, tab.attaching = session, False
         self._sessions[session] = target
@@ -579,17 +582,28 @@ class Sessions:
         self._context_known = True
         return [command for target in list(self._tabs) for command in self._attach(target)]
 
-    def _moved(self, info: object) -> None:
-        """What the browser says of a tab has changed. Only its address is kept."""
+    def _moved(self, info: object) -> list[dict[str, Any]]:
+        """What the browser says of a tab has changed. Only its address is kept, for a tab
+        that is held. A page that is not held is told of: the browser says so of a tab when
+        its address changes, and a tab dropped because its attach, its frame or its world
+        was refused is attached again, and so its next document is listened to."""
         if not isinstance(info, Mapping):
-            return
+            return []
         target = info.get("targetId")
         tab = self._tabs.get(target) if isinstance(target, str) else None
-        if tab is not None and isinstance(info.get("url"), str):
+        if tab is None:
+            return self._told_of(info)
+        if isinstance(info.get("url"), str):
             tab.address = info["url"]
+        return []
 
     def _gone(self, target: object) -> None:
-        tab = self._tabs.pop(target, None) if isinstance(target, str) else None
+        self._forget(target if isinstance(target, str) else None)
+
+    def _forget(self, target: str | None) -> None:
+        """Forget a held tab: it is no longer listened to, and no longer counted as such.
+        It may be told of again."""
+        tab = self._tabs.pop(target, None) if target is not None else None
         if tab is not None and tab.session is not None:
             del self._sessions[tab.session]
             self._frames.pop(tab.session, None)

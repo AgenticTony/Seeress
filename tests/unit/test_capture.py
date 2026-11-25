@@ -824,6 +824,65 @@ def test_a_tab_whose_attach_was_refused_is_dropped() -> None:
     assert again["method"] == "Target.attachToTarget"
 
 
+def test_a_tab_whose_frame_tree_was_refused_is_dropped_and_not_counted_as_listened() -> None:
+    """The listener needs the frame of its tab, and the capture never asked for the frame
+    again. Before, the tab stayed attached and deaf, and was counted as listening: its next
+    document was not listened to, and nothing said so."""
+    held = Held()
+    (attach,) = held.hears(created(info()))
+    held.hears(answer(attach["id"], {"sessionId": "S1"}))
+    assert held.sessions.listened == frozenset({T1})  # attached, while its frame is asked for
+
+    assert held.hears(refused(held.last("Page.getFrameTree")["id"])) == []
+
+    assert held.sessions.listened == frozenset()
+
+
+def test_a_tab_whose_world_was_refused_is_dropped_and_not_counted_as_listened() -> None:
+    held = Held()
+    (attach,) = held.hears(created(info()))
+    held.hears(answer(attach["id"], {"sessionId": "S1"}))
+    (asked,) = held.hears(answer(held.last("Page.getFrameTree")["id"], tree_of(FRAME)))
+    assert asked["method"] == "Page.createIsolatedWorld"
+
+    assert held.hears(refused(asked["id"])) == []
+
+    assert held.sessions.listened == frozenset()
+
+
+@pytest.mark.parametrize("refused_what", ["attach", "frame", "world"])
+def test_the_next_document_of_a_dropped_tab_asks_for_it_again(refused_what: str) -> None:
+    """A tab is dropped when its attach, its frame tree or its world was refused. The browser
+    tells of a tab again when its address changes, and then the capture attaches it again.
+    Before, a dropped tab was deaf for good, whatever the browser told of it after."""
+    held = Held()
+    (attach,) = held.hears(created(info()))
+    if refused_what == "attach":
+        refused_id = attach["id"]
+    else:
+        held.hears(answer(attach["id"], {"sessionId": "S1"}))
+        if refused_what == "frame":
+            refused_id = held.last("Page.getFrameTree")["id"]
+        else:
+            (asked,) = held.hears(answer(held.last("Page.getFrameTree")["id"], tree_of(FRAME)))
+            refused_id = asked["id"]
+    assert held.hears(refused(refused_id)) == []
+    assert held.sessions.listened == frozenset()
+
+    (again,) = held.hears(changed(info(url="https://one.example/next")))
+
+    assert again["method"] == "Target.attachToTarget"
+    assert [
+        command["method"] for command in held.hears(answer(again["id"], {"sessionId": "S2"}))
+    ] == [
+        "Runtime.enable",
+        "Runtime.addBinding",
+        "Page.getFrameTree",
+    ]
+    held.listen(session="S2")
+    assert held.sessions.listened == frozenset({T1})
+
+
 def test_a_late_answer_for_a_tab_that_went_away_attaches_nothing() -> None:
     held = Held()
     command = held.told_of()
