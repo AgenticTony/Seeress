@@ -3,7 +3,7 @@
 Local brains. Your browser. No credits, no cloud, no telemetry.
 
 **Status: a working prototype with foundations under it. Not production grade.** The
-agent loop, flows and the activity logger work. Under them: a lock file, 1,053 unit and
+agent loop, flows and the activity logger work. Under them: a lock file, 1,200 unit and
 contract tests, 7 tests on a real browser, strict types, lint, three import contracts and
 a CI workflow. They pass on the machine this was built on (macOS, arm64) and in CI on
 GitHub's macOS runner; the first green run is
@@ -59,6 +59,7 @@ The profile decides three things, and each is closed on its own:
 | Model-written code | `seeress/browser_api.py`: the prompt is built from the library's real helper list, and a step may use those helpers and plain builtins only |
 | Browser with no route out | `tests/e2e/test_route.py`, and the egress check, which asks for a page from an address that is not exempt and requires a refusal |
 | Nothing leaves the machine | `tools/egress_check.py`, a step in CI |
+| Only what an event holds leaves the record | `tests/unit/test_activity.py` and `tests/contract/test_contracts.py`: a site, a path without query or fragment, a tab, a second and an action. No title and no query reaches one |
 | A failure is a failure | `tests/unit/test_cli.py`: every command exits 1 and prints the reason |
 
 Nothing in the browser tool's own code was changed to get here. Its switches are set from
@@ -116,9 +117,14 @@ smoke-test target).
 
 ### Find the repetitive work
 
-The activity logger records which site you were on, and when: never a page title, never
-what you typed, never a full address. From that record Seeress finds the patterns of sites
-that come back on different days, and proposes them as flows.
+The activity logger notes which site you were on, and when. **Its record holds more than
+that today.** The spike logger keeps each tab's address in full, query included, and its
+page title, in a plain file under your home. Seeress reads only the site, the path without
+the query, and the second from it, and only those ever reach a model. A new capture is being
+built that records a click, an input, a submit or a select, and never a title, a query or
+typed text; it replaces the spike logger once it has run beside it for three days. From the
+record Seeress finds the patterns of sites that come back on different days, and proposes
+them as flows.
 
 ```bash
 seeress mine                      # proposals from your own activity; the evidence first
@@ -160,8 +166,9 @@ Four rules, each learned the hard way:
 - **Never delete or rebuild `.venv` in place while the activity logger runs.** The logger
   starts from it. Build beside it, then swap.
 - **No test can reach the real home.** `tests/conftest.py` points `HOME` and `Path.home()`
-  at a throwaway home for every test but one marked `e2e`. On 2026-11-25 a test was found
-  rewriting the LaunchAgent file of the activity logger on every run of the suite.
+  at a throwaway home for every test, the ones on a real browser included, and gives the
+  browser tool's library a home of its own before any test is imported. On 2026-11-25 a test
+  was found rewriting the LaunchAgent file of the activity logger on every run of the suite.
 
 ### Publishing
 
@@ -232,7 +239,7 @@ The plans behind this, and the decisions under them, are not published.
 ## Layout
 
     seeress/cli.py          the command line; no logic of its own
-    seeress/flows.py        create, list, run, schedule flows
+    seeress/flows.py        create, list, run, schedule flows; compile a proposal
     seeress/agent.py        the loop: model ⇄ python ⇄ browser
     seeress/bodies.py       the browsers behind the two doors, and the marker between them
     seeress/mine.py          the work of `mine`: the record read, mined and reported
@@ -245,7 +252,8 @@ The plans behind this, and the decisions under them, are not published.
     seeress/config.py       profiles, settings file, domain matching
     seeress/miner.py        finds what repeats in the record: sittings, sequences of sites, gaps
     seeress/proposals.py    the flow and the proposal: what is suggested, what is compiled
-    seeress/activity.py     reads the activity record into events, and nothing more of it
+    seeress/capture.py      the capture: a listener in every tab of a browser, and what it reports
+    seeress/activity.py     reads the record into events; writes the capture's events and two notes
     seeress/errors.py       typed errors; each one exits 1
     seeress/watcher.py      activity logger (spike) and analysis
     contracts/              schemas of what crosses a boundary
@@ -263,4 +271,5 @@ The plans behind this, and the decisions under them, are not published.
 
 Records tab events (CDP WebSocket) + focus stream (AppleScript) to
 `~/.seeress/watch/spike-*.jsonl` — everything local, nothing leaves the machine.
-It records only while Chrome's remote debugging is on.
+It records only while Chrome's remote debugging is on. Each line holds the tab's address in
+full and the page's title: Seeress reads only the site, the path and the second from it.
