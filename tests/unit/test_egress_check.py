@@ -2,14 +2,16 @@
 to run. The check itself starts browsers, against nothing here and for real in CI."""
 
 import json
+import os
 import sys
 import time
+import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from seeress import activity, config
+from seeress import activity, config, egress
 from seeress.egress import Finding
 from tools import egress_check
 from tools.egress_check import DOORS, Run, report
@@ -225,3 +227,23 @@ def test_the_capture_s_schedule_in_its_door_is_the_whole_day(tmp_path: Path) -> 
     assert (schedule.start, schedule.end, len(schedule.days)) == (0, 23, 7)
     late = time.mktime((2026, 11, 25, 23, 30, 0, 0, 0, -1))  # a Wednesday, half past eleven
     assert activity.due(late, schedule)
+
+
+def test_the_check_plants_what_a_request_to_a_plain_http_model_follows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The model of the check is plain http, and urllib reads http_proxy for such a request.
+    Only the https names were planted, so the check could not see a request to the model on
+    this machine that followed a proxy. Asked of urllib, under what the check plants."""
+    with monkeypatch.context() as planted:
+        for name in list(os.environ):  # nothing else names a proxy
+            if name.lower().endswith("_proxy"):
+                planted.delenv(name)
+        for name, value in egress_check.PLANTED.items():
+            planted.setenv(name, value)
+        read = urllib.request.getproxies_environment()
+
+    dead = f"http://127.0.0.1:{egress.DEAD_PROXY_PORT}/"
+    assert read == {"http": dead, "https": dead, "all": dead}
+    named = {name for name in egress_check.PLANTED if name.lower().endswith("_proxy")}
+    assert named == {cased for name in named for cased in (name.lower(), name.upper())}

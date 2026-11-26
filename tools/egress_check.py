@@ -107,9 +107,14 @@ PLANTED: dict[str, str] = {
     "BH_UPDATE_CHECK": "1",
     "BH_HOME": "/a/home/of-someone-else",
     "BH_AGENT_WORKSPACE": "/a/workspace/of-someone-else",
+    # The model on this machine is plain http, and urllib reads http_proxy for it: a request
+    # to the model that follows a proxy would leave with what was said to the model.
+    "HTTP_PROXY": f"http://127.0.0.1:{egress.DEAD_PROXY_PORT}/",
+    "http_proxy": f"http://127.0.0.1:{egress.DEAD_PROXY_PORT}/",
     "HTTPS_PROXY": f"http://127.0.0.1:{egress.DEAD_PROXY_PORT}/",
     "https_proxy": f"http://127.0.0.1:{egress.DEAD_PROXY_PORT}/",
     "ALL_PROXY": f"http://127.0.0.1:{egress.DEAD_PROXY_PORT}/",
+    "all_proxy": f"http://127.0.0.1:{egress.DEAD_PROXY_PORT}/",
     "PYTHONPATH": "/a/path/of-someone-else",
 }
 
