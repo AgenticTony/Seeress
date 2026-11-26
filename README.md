@@ -6,7 +6,7 @@ Local brains. Your browser. No credits, no cloud, no telemetry.
 agent loop, flows and the activity logger work, and so does a new capture of what a person
 does in a page. It is built and tested, and it is not yet the logger: before it replaces
 the old one it runs beside it for three days (see "The capture"). Under them: a lock
-file, 1,511 unit and contract tests, 55 tests on a real browser, strict types, lint,
+file, 1,512 unit and contract tests, 55 tests on a real browser, strict types, lint,
 three import contracts and a CI workflow. They pass on the machine this was built on
 (macOS, arm64). In CI on GitHub's macOS runner the first green run was
 [45566464574](https://github.com/AgenticTony/Seeress/actions/runs/45566464574); the
