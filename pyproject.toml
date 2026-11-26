@@ -133,6 +133,7 @@ layers = [
     "seeress.env",
     "seeress.capture",
     "seeress.config",
+    "seeress.steps",
     "seeress.miner",
     "seeress.proposals",
     "seeress.activity",
