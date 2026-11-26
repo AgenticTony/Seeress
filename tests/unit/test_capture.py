@@ -2681,6 +2681,72 @@ def test_no_path_of_the_record_reaches_the_log(
     assert "/private/invoices/7" not in caplog.text
 
 
+SITE = "a-site-that-must-never-be-logged.example"
+PATH = "/a-path/that-must-never-be-logged/7"
+FINGERPRINT = 'button[data-testid="never-logged"]'
+ONE = activity.Event(
+    1, TS, "click", SITE, PATH, T1[:8], activity.Action("click", "button", FINGERPRINT, None)
+)
+
+
+class Through(Refused):
+    """Refused, after one event has passed through the gate it was given, as the capture's
+    own recorder does when the listener of a tab reports."""
+
+    def __init__(
+        self,
+        address: str,
+        emit: Callable[[activity.Event], None],
+        *,
+        keep: Callable[[], None] | None = None,
+        every: float = 3600.0,
+        status: capture.Status | None = None,
+    ) -> None:
+        self.gate = emit
+        super().__init__(address, emit, keep=keep, every=every, status=status)
+
+    def start(self) -> None:
+        self.gate(ONE)
+        super().start()
+
+
+def test_no_site_or_path_of_the_record_reaches_the_log_through_the_logger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A log is not the record: it has none of the record's protection, retention or forget.
+    The gate alone was held to this, and a logger that said each event's site and path as
+    its run ended passed every test. One event passes through the real gate, into the real
+    record under the home, and the run of the logger ends: what is said is a count."""
+    caplog.set_level(logging.DEBUG, logger="seeress")
+    clock = Clock()
+    monkeypatch.setattr(capture, "Recorder", Through)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    said = capture.run(
+        "ws://127.0.0.1:9/devtools/browser/one", home=tmp_path, seconds=1, stop=clock
+    )
+
+    assert said == 1
+    assert clock.waits == [5.0]  # one attempt, and the clock ran out in the pause after it
+    kept = [
+        (event.site, event.path, event.action.fingerprint if event.action else None)
+        for event in activity.read_events(tmp_path)
+    ]
+    assert kept == [(SITE, PATH, FINGERPRINT)]  # it is in the record, so a log could hold it
+    lines = [record.getMessage() for record in caplog.records]
+    assert [line for line in lines if "events written" in line] == [
+        "1 events written; 0 outside the schedule; 0 over the cap"
+    ]
+    out, err = capsys.readouterr()
+    for line in (*lines, out, err):
+        assert SITE not in line
+        assert PATH not in line
+        assert FINGERPRINT not in line
+
+
 def test_the_handlers_there_were_are_put_back_as_they_were(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
