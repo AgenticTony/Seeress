@@ -1,7 +1,8 @@
 # Contracts
 
-Everything that crosses a boundary has a schema here, and the schema is the only place the
-shape is written down. A boundary is a process, a language or a trust zone:
+Every message that crosses a boundary today has a schema here, and the schema is the only
+place its shape is written down. The rows of the phases to come name a message and have no
+schema yet. A boundary is a process, a language or a trust zone:
 
 | Boundary | Examples | Phase |
 |---|---|---|
@@ -21,8 +22,11 @@ Schemas are [JSON Schema](https://json-schema.org/draft/2020-12/schema), draft 2
 - A message is validated where it is read, never only where it is written.
 - A field is never removed and its meaning never changes. Add a field, or add a new
   optional member to an enumeration. Anything else needs a new schema with a new `$id`.
-- `tests/contract/` proves that each schema and the code that reads its message agree:
-  whatever one accepts, the other accepts, with the same fields.
+- `tests/contract/` checks that each schema and the code that reads its message agree:
+  whatever one accepts, the other accepts, with the same fields. It does so on an instance
+  written for each field and on generated ones. That is a check on those instances, not a
+  proof of the two as a whole: on 2026-11-26 a review found a value the schema took and the
+  reader refused, after every instance had agreed.
 - A pattern is written in the ECMA-262 dialect, which every language that reads the schema
   can read. One that must end at the end of a string ends in `(?![\s\S])` and not in `$`: in
   Python, `$` also holds before a final newline.

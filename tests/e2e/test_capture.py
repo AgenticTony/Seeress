@@ -1,8 +1,11 @@
 """End to end, with a real browser: the capture.
 
 These start a real Chromium, headless, on a throwaway profile inside a throwaway Seeress
-home, and the capture on a connection of its own to it. Each test stops the browser. They
-never touch the user's Chrome: looking up its address fails loudly in the fixture.
+home, and the capture on a connection of its own to it. Each test stops the browser. None
+of them attaches to the user's Chrome: looking up its address fails loudly in the fixture.
+One runs the browser tool, to plant the marker as the product does, and that tool's library
+asks 127.0.0.1:9222 for a browser's version before it reads the address Seeress gave it. It
+is a read of a version string on this machine, and the README says so under Development.
 
 Run them with:  .venv/bin/python -m pytest -m e2e
 """
