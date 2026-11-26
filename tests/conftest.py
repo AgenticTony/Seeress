@@ -9,15 +9,17 @@ The browser tool's own library is given a home of its own before any test module
 imported, because two import it, and on import it reads and writes where it lives.
 """
 
+import contextlib
 import functools
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from pathlib import Path
-from types import ModuleType
+from types import FrameType, ModuleType
 from typing import Any
 
 import pytest
@@ -51,6 +53,104 @@ def pytest_configure(config: pytest.Config) -> None:
 
 class OutsideWorldError(RuntimeError):
     """Raised when a unit test tries to start a process or open a connection."""
+
+
+# How long a test may run before it fails for not ending. A test that waits for something
+# that never comes was still running when the runner was stopped, and nothing said which
+# test it was: on 2026-11-26 six rules of the capture, each broken alone, failed a test by
+# name and then left the run going for good. No test that needs no browser takes more than
+# five seconds, and the slowest on a browser takes four.
+LIMIT_OF_A_UNIT_TEST = 30.0
+LIMIT_OF_A_BROWSER_TEST = 120.0
+
+# As they are when this is imported: a test may replace them in the course of a run.
+_SIGNAL = signal.signal
+_SETITIMER = signal.setitimer
+
+# The test that did not end in each run, by the run's session. The first ends the run.
+_DID_NOT_END: dict[int, str] = {}
+
+
+class TestDidNotEnd(BaseException):
+    """Raised in a test that is still running after its limit. Not an Exception: nothing
+    catches it by accident on the way up."""
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, Any]:
+    """Remember, with its run, a test that failed for not ending."""
+    yield
+    if call.excinfo is not None and isinstance(call.excinfo.value, TestDidNotEnd):
+        _DID_NOT_END[id(item.session)] = item.nodeid
+
+
+def pytest_runtest_protocol(item: pytest.Item) -> None:
+    """No test is started after one that did not end.
+
+    With only a limit on each test, every test after a broken one that waits pays the limit
+    too: a run of the capture's tests alone took eleven minutes under one such rule, with a
+    recorder turning all the while. The test that did not end has been reported by now, and
+    the run stops with its name.
+    """
+    if id(item.session) in _DID_NOT_END:
+        pytest.exit(
+            f"{_DID_NOT_END[id(item.session)]} did not end. No test after it is started.",
+            returncode=1,
+        )
+
+
+@contextlib.contextmanager
+def _within_the_limit(item: pytest.Item) -> Iterator[None]:
+    """The alarm of the system, armed for one phase of a test and for nothing else.
+
+    It is armed for the setup, the call and the teardown of a test, and disarmed before any
+    report is made. Armed for a whole test at once, it went off once while the runner was
+    writing the report of another failure: there it is not a failed test but an internal
+    error. A test that waits for what does not come is woken by it, and fails.
+    """
+    on_a_browser = item.get_closest_marker("e2e") is not None
+    limit = LIMIT_OF_A_BROWSER_TEST if on_a_browser else LIMIT_OF_A_UNIT_TEST
+    if not hasattr(signal, "setitimer"):  # Windows has no interval timer
+        yield
+        return
+
+    def late(signum: int, frame: FrameType | None) -> None:
+        raise TestDidNotEnd(
+            f"{item.nodeid} is still running after {limit:g} s: it waits for something that"
+            " does not come."
+        )
+
+    try:
+        before = _SIGNAL(signal.SIGALRM, late)
+    except ValueError:  # not in the main thread, where a signal cannot be caught
+        yield
+        return
+    _SETITIMER(signal.ITIMER_REAL, limit)
+    try:
+        yield
+    finally:
+        _SETITIMER(signal.ITIMER_REAL, 0)
+        _SIGNAL(signal.SIGALRM, before)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item: pytest.Item) -> Generator[None]:
+    with _within_the_limit(item):
+        return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> Generator[None]:
+    with _within_the_limit(item):
+        return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Generator[None]:
+    with _within_the_limit(item):
+        return (yield)
 
 
 @pytest.fixture(autouse=True)

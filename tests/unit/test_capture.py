@@ -2314,6 +2314,20 @@ class Refused:
         return None
 
 
+class Stopped(threading.Event):
+    """A stop that, once set, still takes its time when it is waited on.
+
+    The logger waits on its stop between two looks at the capture. Under a rule broken it
+    takes no notice of the stop, and a wait that returned at once set it turning in a tight
+    loop, in a thread of its own: which starved the run of every test after it. Correct code
+    never waits on a stop that is set.
+    """
+
+    def wait(self, timeout: float | None = None) -> bool:
+        time.sleep(timeout or 0)
+        return self.is_set()
+
+
 class Clock(threading.Event):
     """A clock the test moves, and a stop that is set when the test says. Each wait advances
     the clock by what was waited, and nothing is waited for in truth."""
@@ -2727,10 +2741,13 @@ def test_the_logger_keeps_the_days_the_settings_say(
     monkeypatch.setattr(capture, "retention", retention)
     standing = Standing()
     monkeypatch.setattr(capture, "connect", standing)
-    stop = threading.Event()
+    stop = Stopped()
     said: list[int] = []
+    # A daemon: under a rule broken, a logger that never ends must not keep the process
+    # alive after its own summary. One did, for four minutes, with the run already told,
+    # and it was turning all the while.
     logger = threading.Thread(
-        target=lambda: said.append(capture.run(NOWHERE, home=tmp_path, stop=stop))
+        target=lambda: said.append(capture.run(NOWHERE, home=tmp_path, stop=stop)), daemon=True
     )
     logger.start()
     try:
@@ -2741,6 +2758,7 @@ def test_the_logger_keeps_the_days_the_settings_say(
         logger.join(10)
 
     assert kept == [(tmp_path, 7)]
+    assert not logger.is_alive(), "the logger did not end when it was stopped"
 
 
 def test_stop_waits_for_the_thread_of_the_capture_however_long_it_takes(
