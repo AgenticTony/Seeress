@@ -116,6 +116,7 @@ PLANTED: dict[str, str] = {
     "ALL_PROXY": f"http://127.0.0.1:{egress.DEAD_PROXY_PORT}/",
     "all_proxy": f"http://127.0.0.1:{egress.DEAD_PROXY_PORT}/",
     "PYTHONPATH": "/a/path/of-someone-else",
+    "PYTHONSTARTUP": "/a/startup/of-someone-else",
 }
 
 

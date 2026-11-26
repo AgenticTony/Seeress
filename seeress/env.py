@@ -117,10 +117,14 @@ DENIED_EXAMPLES: tuple[str, ...] = (
     "ANTHROPIC_API_KEY",
     "HTTPS_PROXY",
     "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
     "ALL_PROXY",
+    "all_proxy",
     "PYTHONPATH",
     "PYTHONSTARTUP",
     "BH_TELEMETRY",
+    "BH_AGENT_WORKSPACE",
 )
 
 # The daemon name of each door that owns its browser. A door without an entry uses the

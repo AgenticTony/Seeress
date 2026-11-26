@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from seeress import activity, config, egress
+from seeress import activity, config, egress, env
 from seeress.egress import Finding
 from tools import egress_check
 from tools.egress_check import DOORS, Run, report
@@ -247,3 +247,18 @@ def test_the_check_plants_what_a_request_to_a_plain_http_model_follows(
     assert read == {"http": dead, "https": dead, "all": dead}
     named = {name for name in egress_check.PLANTED if name.lower().endswith("_proxy")}
     assert named == {cased for name in named for cased in (name.lower(), name.upper())}
+
+
+def test_the_check_and_the_judge_name_the_same_settings() -> None:
+    """env names the settings a child must never be given, and says the check plants each of
+    them: a name on that list and not planted is refused by a test, and never looked for
+    where a child was given it. And every name the check plants, that no child may be given,
+    is on that list: the judge names such a one at once, and any other only as unknown.
+    BH_HOME is planted and left off the list, since the tool's child is given it by design,
+    with a folder of Seeress's own."""
+    denied = set(env.DENIED_EXAMPLES)
+
+    assert denied <= set(egress_check.PLANTED)
+
+    given_by_design = set(env.PASSTHROUGH) | set(env.FORCED) | {"BH_HOME"}
+    assert set(egress_check.PLANTED) - given_by_design <= denied
