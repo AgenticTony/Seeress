@@ -1043,3 +1043,23 @@ def test_show_of_a_task_inside_one_site_says_its_sites_and_no_step(tmp_path: Pat
 
     assert "  sites:  erp.example" in shown
     assert "steps" not in shown and "/orders" not in shown
+
+
+def test_the_report_says_when_a_task_goes_on_past_its_fiftieth_step(tmp_path: Path) -> None:
+    """Sixty steps, the same on three days: one proposal by its first fifty, and a line that
+    says the task goes on. Before, one proposal for each step past the forty-ninth."""
+    lines: list[dict[str, Any]] = []
+    for day in THREE_DAYS:
+        for number in range(60):
+            element = ("td", f'td[name="f{chr(97 + number // 26)}{chr(97 + number % 26)}"]')
+            clock = f"09:{number // 60:02d}:{number % 60:02d}"
+            lines.append(did("input", at(day, clock), element, field="text"))
+    write(tmp_path, "activity-20261116.jsonl", *lines)
+
+    report = mine.mine(tmp_path, None, ask=None, now=NOW)
+
+    assert "Proposals: 1." in report
+    assert report.rstrip("\n").splitlines()[-2:] == [
+        '          50. input  /  td[name="fbx"]  text',
+        "          (the task goes on past step 50; the rest is not shown)",
+    ]

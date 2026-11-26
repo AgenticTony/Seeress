@@ -975,3 +975,79 @@ def test_the_strongest_holder_of_a_part_decides_and_not_the_last_looked_at() -> 
     found = miner.recurring(miner.sessions(events), sizes=(2, 6))
 
     assert ("p.example", "q.example") not in [candidate.sites for candidate in found]
+
+
+# ------------------------------------------------- a task longer than fifty ---
+
+
+def task_of(
+    count: int, days: Sequence[str] = (MONDAY, WEDNESDAY, FRIDAY), first: int = 0
+) -> list[activity.Event]:
+    """A task of count steps, each on a page and an element of its own, done the same way on
+    every day, from the step numbered first."""
+    steps_of_it = [
+        (f"/t/{word(at)}", ("td", f'td[name="f{word(at)}"]')) for at in range(first, first + count)
+    ]
+    events: list[activity.Event] = []
+    for day in days:
+        clock = Clock(day)
+        events += [
+            did("input", clock.now(), element, path=path, field="text")
+            for path, element in steps_of_it
+        ]
+    return events
+
+
+def test_a_task_of_a_hundred_steps_is_one_proposal_by_its_first_fifty_steps() -> None:
+    """The windows of fifty overlap by forty-nine steps, and a task of a hundred gave fifty-one
+    proposals, each with a name of its own. A window that comes one step after another, in a
+    sitting, is the same run seen one step on: the first is kept and the rest are held."""
+    found = steps.recurring(miner.sessions(task_of(100)))
+
+    assert [(len(candidate.steps or ()), candidate.further) for candidate in found] == [(50, True)]
+    assert found[0].steps is not None
+    assert (found[0].steps[0].path, found[0].steps[-1].element) == (
+        f"/t/{word(0)}",
+        f'td[name="f{word(49)}"]',
+    )
+
+
+def test_a_task_of_fifty_is_whole_and_is_not_said_to_go_on() -> None:
+    (found,) = steps.recurring(miner.sessions(task_of(50)))
+
+    assert (len(found.steps or ()), found.further) == (50, False)
+
+
+def test_a_window_that_recurs_on_more_days_than_the_one_before_it_is_kept() -> None:
+    """Five days of fifty steps; on three of them another step comes first. The window that
+    begins with that step recurs on three days and the one after it on five: both are kept, as
+    a part seen on more days than a longer sequence is kept."""
+    events: list[activity.Event] = []
+    for at, day in enumerate((MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY)):
+        clock = Clock(day)
+        if at < 3:
+            events.append(
+                did("input", clock.now(), ("td", 'td[name="before"]'), path="/before", field="text")
+            )
+        events += task_of(50, days=(day,))
+
+    found = steps.recurring(miner.sessions(events))
+
+    assert sorted(
+        (candidate.days, candidate.steps[0].path if candidate.steps else None, candidate.further)
+        for candidate in found
+    ) == [(3, "/before", True), (5, f"/t/{word(0)}", False)]
+
+
+def test_the_search_on_sites_does_not_join_its_windows() -> None:
+    """Nine sites in a row, on three days: four proposals, as before the search on steps was
+    made. The rule of one window a run is for steps alone."""
+    events: list[activity.Event] = []
+    for day in (MONDAY, WEDNESDAY, FRIDAY):
+        clock = Clock(day)
+        events += [went(f"s{at}.example", clock.now()) for at in range(9)]
+
+    found = miner.recurring(miner.sessions(events))
+
+    assert [len(candidate.sites) for candidate in found] == [6, 6, 6, 6]
+    assert [candidate.further for candidate in found] == [False] * 4

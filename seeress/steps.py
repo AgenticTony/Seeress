@@ -88,8 +88,12 @@ def recurring(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
     days, most days first, each with its steps as evidence.
 
     The search is the one on sites (seeress.miner.recurring), on the steps of each sitting.
+    A task longer than fifty steps is one proposal, by its first fifty steps, and says that
+    it goes on.
     """
-    return miner.recurring(sittings, days, units=of, sizes=(LEAST_STEPS, MOST_STEPS))
+    return miner.recurring(
+        sittings, days, units=of, sizes=(LEAST_STEPS, MOST_STEPS), one_window_a_run=True
+    )
 
 
 def beside(site_candidates: Sequence[Candidate], on_steps: Sequence[Candidate]) -> list[Candidate]:

@@ -288,6 +288,10 @@ def _proposal_lines(proposal: Proposal, candidate: Candidate | None, *, home: Pa
     ]
     if candidate is not None and candidate.steps is not None:
         lines.extend(steps.lines(candidate.steps))
+        if candidate.further:
+            lines.append(
+                f"          (the task goes on past step {steps.MOST_STEPS}; the rest is not shown)"
+            )
     if candidate is not None and candidate.steps is None:
         shown = " · ".join(
             f"{site}: {', '.join(there)}"

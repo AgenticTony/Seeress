@@ -178,7 +178,8 @@ class Candidate:
     to day: the sites, or the keys of the steps.
 
     order is "fixed" when the sites recur in this order, and "varies" when they recur as a
-    set, in any order.
+    set, in any order. further says that a block of the most steps is followed, in some
+    sitting, by another such block: the task goes on, and its later steps are not shown.
     """
 
     sites: tuple[str, ...]
@@ -191,6 +192,7 @@ class Candidate:
     order: str = "fixed"
     keys: tuple[str, ...] | None = None
     steps: tuple[Step, ...] | None = None
+    further: bool = False
 
 
 def visits(sitting: Session) -> list[Unit]:
@@ -219,6 +221,7 @@ def recurring(
     *,
     units: Callable[[Session], Sequence[Unit]] = visits,
     sizes: tuple[int, int] = (LEAST_SITES, MOST_SITES),
+    one_window_a_run: bool = False,
 ) -> list[Candidate]:
     """The sequences, of the lengths given, that occur in sittings on at least days different
     days, most days first.
@@ -235,6 +238,11 @@ def recurring(
 
     Where two candidates were seen on as many days, the one seen in more sittings comes
     first. Where those are equal too, the one whose sites come first alphabetically.
+
+    With one_window_a_run, a block of the most steps that comes one step after another, in
+    a sitting, is held: it is the same run seen one step on, and without this a run longer
+    than the most gives one block for every step past it. It is held when the one before
+    recurs on as many days; seen on more days, it is kept.
     """
     sequences = [units(sitting) for sitting in sittings]
     enough = _recurring(sequences, [sitting.day for sitting in sittings], days, sizes)
@@ -248,9 +256,17 @@ def recurring(
                     occurrences.setdefault(block, []).append((index, position))
     # The evidence is gathered for the sequences kept alone. In a record where a long run
     # recurs, every window of the run is found, and all but the longest are held.
-    held = _held(occurrences, sittings)
+    windows = _windows(occurrences, sizes[1]) if one_window_a_run else {}
+    held = _held(occurrences, sittings, windows)
     kept = [
-        _candidate(block, occurrences[block], sittings, sequences)
+        _candidate(
+            block,
+            occurrences[block],
+            sittings,
+            sequences,
+            further=len(block) == sizes[1]
+            and any((index, at + 1) in windows for index, at in occurrences[block]),
+        )
         for block in occurrences
         if block not in held
     ]
@@ -302,6 +318,7 @@ def _candidate(
     where: Sequence[tuple[int, int]],
     sittings: Sequence[Session],
     sequences: Sequence[Sequence[Unit]],
+    further: bool = False,
 ) -> Candidate:
     """The candidate for one block, with its evidence gathered from every occurrence.
 
@@ -362,6 +379,7 @@ def _candidate(
         "fixed",
         block,
         None if steps is None else tuple(steps),
+        further,
     )
 
 
@@ -390,9 +408,22 @@ def _most_common_hour(hours: Counter[int]) -> int:
     return min(hour for hour, count in hours.items() if count == max(hours.values()))
 
 
+def _windows(
+    occurrences: Mapping[tuple[str, ...], Sequence[tuple[int, int]]], most: int
+) -> dict[tuple[int, int], tuple[str, ...]]:
+    """Where a block of the most steps starts: in which sitting, and at what step."""
+    return {
+        (index, position): block
+        for block, where in occurrences.items()
+        if len(block) == most
+        for index, position in where
+    }
+
+
 def _held(
     occurrences: Mapping[tuple[str, ...], Sequence[tuple[int, int]]],
     sittings: Sequence[Session],
+    windows: Mapping[tuple[int, int], tuple[str, ...]],
 ) -> set[tuple[str, ...]]:
     """The blocks that another one found holds as a contiguous block on at least as many days.
 
@@ -421,6 +452,13 @@ def _held(
                 part = block[position : position + size]
                 if marked.get(part, 0) < days_of[block]:
                     marked[part] = days_of[block]
+    # A block of the most steps that comes one step after another, in a sitting, is the same
+    # run seen one step on. It is held when the one before it recurs on as many days: seen
+    # on more days than the one before, it is kept, as any part seen on more days is.
+    for (index, at), block in windows.items():
+        before = windows.get((index, at - 1))
+        if before is not None and before != block and days_of[before] >= days_of[block]:
+            held.add(block)
     return held
 
 
