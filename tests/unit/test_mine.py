@@ -907,3 +907,138 @@ def test_the_gaps_follow_the_schedule_of_the_settings(tmp_path: Path) -> None:
     report = mine.mine(tmp_path, ask=None, now=NOW)
 
     assert no_data(report) == "Time with no data: 58 of 60 minutes in the schedule (97%)."
+
+
+# ------------------------------------------------------- a task inside one site ---
+
+
+SOURCE, TARGET = "a1b2c3d4", "e5f60718"  # two tabs of one site
+CELL = ("td", 'td[name="qty-#"]')
+FIELD = ("input", 'input[name="line-#"]')
+SAVE = ("button", 'button[data-testid="save"]')
+
+
+def did(kind: str, ts: str, element: tuple[str, str], **where: Any) -> dict[str, Any]:
+    """A line the capture writes for a click, an input, a submit or a select in a page."""
+    line: dict[str, Any] = {
+        "v": 1,
+        "ts": ts,
+        "kind": kind,
+        "site": where.get("site", "erp.example"),
+        "path": where.get("path", "/"),
+        "target": where.get("tab", SOURCE),
+        "action": {"type": kind, "tag": element[0], "fingerprint": element[1]},
+    }
+    if "field" in where:
+        line["action"]["field"] = where["field"]
+    return line
+
+
+def job(day: str, rounds: int = 3) -> list[dict[str, Any]]:
+    """A copy-and-paste job between two tabs of one site, then a save. A second apart."""
+    lines: list[dict[str, Any]] = []
+    second = 0
+    for _ in range(rounds):
+        for line in (
+            did("click", "", CELL, path="/orders"),
+            did("click", "", FIELD, path="/report", tab=TARGET),
+            did("input", "", FIELD, path="/report", tab=TARGET, field="text"),
+        ):
+            second += 1
+            line["ts"] = at(day, f"09:{second // 60:02d}:{second % 60:02d}")
+            lines.append(line)
+    second += 1
+    lines.append(
+        did(
+            "click",
+            at(day, f"09:{second // 60:02d}:{second % 60:02d}"),
+            SAVE,
+            path="/report",
+            tab=TARGET,
+        )
+    )
+    return lines
+
+
+def three_days_of_job(home: Path) -> None:
+    """The job on Monday, Wednesday and Friday, each in the file of its day."""
+    for day in THREE_DAYS:
+        write(home, f"activity-{day.replace('-', '')}.jsonl", *job(day))
+
+
+def test_the_report_shows_the_steps_of_a_task_inside_one_site(tmp_path: Path) -> None:
+    three_days_of_job(tmp_path)
+
+    report = mine.mine(tmp_path, None, ask=None, now=NOW)
+
+    assert "Proposals: 1." in report
+    assert [
+        line for line in report.splitlines() if "steps:" in line or line.startswith("          ")
+    ] == [
+        '  steps:  1. click  /orders  td[name="qty-#"]  ×3  other tab',
+        '          2. click  /report  input[name="line-#"]  ×3  other tab',
+        '          3. input  /report  input[name="line-#"]  text  ×3',
+        '          4. click  /report  button[data-testid="save"]',
+    ]
+    assert "  sites:  erp.example" in report
+    assert "  paths:" not in report
+
+
+def test_nothing_of_a_step_is_remembered_with_a_proposal(tmp_path: Path) -> None:
+    three_days_of_job(tmp_path)
+
+    mine.mine(tmp_path, None, ask=None, now=NOW)
+
+    (file,) = (tmp_path / "proposals").iterdir()
+    text = file.read_text(encoding="utf-8")
+    (proposal,) = files_of(tmp_path)[file.name]
+    assert proposal.sites == ("erp.example",) * 4
+    for not_kept in ("/orders", "/report", "td[", "input[", "button[", "qty", "steps"):
+        assert not_kept not in text
+
+
+def test_the_model_is_told_the_kinds_of_the_steps_and_no_page_and_no_element(
+    tmp_path: Path,
+) -> None:
+    three_days_of_job(tmp_path)
+    model = Model(said({"n": 1, "sentence": "Enters figures.", "confidence": 3}))
+
+    report = mine.mine(tmp_path, None, ask=model, now=NOW)
+
+    (prompt,) = model.prompts
+    assert "sites: erp.example (always in this order) · steps: click, click, input, click" in prompt
+    for not_told in ("/orders", "/report", "td[", "qty", "line-#"):
+        assert not_told not in prompt
+    assert "confidence 3: Enters figures." in report
+
+
+def test_what_the_steps_say_wholly_of_the_sites_is_proposed_once(tmp_path: Path) -> None:
+    lines: list[dict[str, Any]] = []
+    for day in THREE_DAYS:
+        two = (
+            did("click", "", SAVE, site="a.example"),
+            did("input", "", FIELD, site="b.example", field="text"),
+        )
+        for clock, line in enumerate(two, start=1):
+            line["ts"] = at(day, f"09:00:{clock:02d}")
+            lines.append(line)
+    write(tmp_path, "activity-20261116.jsonl", *lines)
+
+    report = mine.mine(tmp_path, None, ask=None, now=NOW)
+
+    assert "Proposals: 1." in report
+    assert list(files_of(tmp_path)) != [f"{names('ab')}.jsonl"]
+    (proposal,) = files_of(tmp_path)[next(iter(files_of(tmp_path)))]
+    assert proposal.sites == ("a.example", "b.example")
+    assert "  steps:" in report
+
+
+def test_show_of_a_task_inside_one_site_says_its_sites_and_no_step(tmp_path: Path) -> None:
+    three_days_of_job(tmp_path)
+    mine.mine(tmp_path, None, ask=None, now=NOW)
+    (name,) = [file.stem for file in (tmp_path / "proposals").iterdir()]
+
+    shown = mine.show(name, tmp_path)
+
+    assert "  sites:  erp.example" in shown
+    assert "steps" not in shown and "/orders" not in shown

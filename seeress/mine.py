@@ -16,7 +16,7 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
-from . import miner
+from . import miner, steps
 from .activity import (
     FlowRun,
     Interval,
@@ -30,7 +30,7 @@ from .activity import (
 from .brain import chat, endpoint_for, message
 from .config import load_settings, seeress_home
 from .errors import MiningError
-from .miner import Ask, Candidate, Gap, Session, by_strength, name_of
+from .miner import Ask, Candidate, Gap, Session, name_of, once
 from .proposals import (
     APPROVED,
     DAYS_AT_MOST,
@@ -154,8 +154,9 @@ def _nothing_found(home: Path, hours: float | None) -> str:
 
 
 def _candidates(sittings: Sequence[Session]) -> list[Candidate]:
-    """Every candidate, strongest first: the sequences that recur, and the rituals whose order
-    varies.
+    """Every candidate, strongest first: the sequences that recur, the rituals whose order
+    varies, and beside them the sequences of steps that recur. A sequence of steps that
+    says wholly what a sequence of sites says takes its place.
 
     A ritual whose sites are exactly those of a sequence is left out: the sequence says all
     the ritual says, and the order too.
@@ -167,7 +168,7 @@ def _candidates(sittings: Sequence[Session]) -> list[Candidate]:
         for candidate in miner.clusters(sittings)
         if frozenset(candidate.sites) not in sequenced
     ]
-    return by_strength([*fixed, *varied])
+    return steps.beside([*fixed, *varied], steps.recurring(sittings))
 
 
 def _report(
@@ -206,7 +207,7 @@ def _report(
         lines.append(f"Proposals: {len(pairs)}.")
         last = sorted(pairs, key=lambda pair: pair[1].status == "dismissed")
         for candidate, proposal in last:
-            lines.extend(_proposal_lines(proposal, candidate.paths, home=home))
+            lines.extend(_proposal_lines(proposal, candidate, home=home))
     return "\n".join(lines) + "\n"
 
 
@@ -264,14 +265,14 @@ def _gap_lines(gaps: Sequence[Gap]) -> list[str]:
     return lines
 
 
-def _proposal_lines(
-    proposal: Proposal, paths: Sequence[tuple[str, ...]] | None, *, home: Path
-) -> list[str]:
+def _proposal_lines(proposal: Proposal, candidate: Candidate | None, *, home: Path) -> list[str]:
     """The lines of one proposal: its name and status, its sites, its evidence, and its goal.
 
-    paths holds one tuple for each site: what was seen there, as the miner found it. A
-    proposal remembered from an earlier run has none to show, for a path is never
-    remembered with it.
+    candidate is the one the proposal was made from in this run, and None when the proposal
+    is only remembered. A site that comes again right after itself is shown once. The steps
+    of a task are shown, and no paths beside them: each step says its page. A proposal on
+    sites shows the paths seen there, as the miner found them. A proposal remembered from an
+    earlier run has no evidence to show, for none is remembered with it.
 
     The goal is shown as the user's words once the user wrote it, with no confidence of a
     model beside it. Until then it is a model's sentence.
@@ -280,13 +281,16 @@ def _proposal_lines(
     seen = sum(proposal.sessions.values())
     lines = [
         f"{proposal.name}   {proposal.status}{order}",
-        f"  sites:  {' → '.join(proposal.sites)}",
+        f"  sites:  {' → '.join(once(proposal.sites))}",
         f"  seen:   on {proposal.days} days, in {seen} sittings; first {proposal.first_seen},"
         f" last {proposal.last_seen}; usually at hour {proposal.hour}",
     ]
-    if paths is not None:
+    if candidate is not None and candidate.steps is not None:
+        lines.extend(steps.lines(candidate.steps))
+    if candidate is not None and candidate.steps is None:
         shown = " · ".join(
-            f"{site}: {', '.join(there)}" for site, there in zip(proposal.sites, paths, strict=True)
+            f"{site}: {', '.join(there)}"
+            for site, there in zip(proposal.sites, candidate.paths, strict=True)
         )
         lines.append(f"  paths:  {shown}")
     if proposal.goal:
@@ -309,8 +313,8 @@ def _home(home: Path | None) -> Path:
 
 
 def show(name: str, home: Path | None = None) -> str:
-    """One proposal as the report of mine prints it, but without its paths: they are the
-    evidence of the run that found it, and are not remembered with it."""
+    """One proposal as the report of mine prints it, but without its evidence: the paths and
+    the steps are those of the run that found it, and are not remembered with it."""
     home = _home(home)
     return "\n".join(_proposal_lines(remembered(home, name), None, home=home)) + "\n"
 

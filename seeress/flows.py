@@ -29,6 +29,7 @@ from .agent import (
 from .brain import Message, chat, endpoint_for, message
 from .browser_api import SYSTEM_PROMPT, check_code
 from .errors import FlowError, MiningError, SeeressError, UnsafeCodeError
+from .miner import once
 from .proposals import Proposal, record, remembered
 from .runner import run_browser_command
 
@@ -207,10 +208,11 @@ def description_for(proposal: Proposal) -> str:
 
     Nothing else: no path, no count, no hour, and no sentence of a model.
     """
+    sites_of = once(proposal.sites)
     if proposal.order == "varies":
-        sites = f"The task uses these sites: {', '.join(proposal.sites)}."
+        sites = f"The task uses these sites: {', '.join(sites_of)}."
     else:
-        sites = f"The task visits these sites, in this order: {' → '.join(proposal.sites)}."
+        sites = f"The task visits these sites, in this order: {' → '.join(sites_of)}."
     return f"{proposal.goal} {sites}"
 
 

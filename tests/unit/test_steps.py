@@ -17,7 +17,7 @@ MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY = (
 )
 
 # Two tabs of one site.
-SOURCE, TARGET = "source000", "target000"
+SOURCE, TARGET = "a1b2c3d4", "e5f60718"  # two tabs of one site
 
 # Elements as the listener names them: the tag, and how the element is told apart.
 CELL = ("td", 'td[name="qty-#"]')
@@ -391,3 +391,146 @@ def test_the_model_is_told_the_kinds_of_the_steps_and_no_page_and_no_element() -
     )
     assert "orders" not in prompt and "report" not in prompt and "qty" not in prompt
     assert "line-#" not in prompt and "save" not in prompt.split("Answer with")[0]
+
+
+# ------------------------------------------------- beside the search on sites ---
+
+
+def two_sites(day: str, first: str, then: str) -> list[activity.Event]:
+    """A click on one site and an input on another, a second apart."""
+    clock = Clock(day)
+    return [
+        did("click", clock.now(), (first.split("[")[0], first), site="a.example"),
+        did("input", clock.now(), (then.split("[")[0], then), site="b.example", field="text"),
+    ]
+
+
+WANTED = 'button[data-testid="save"]'
+TYPED = 'input[name="line-#"]'
+
+
+def test_what_the_steps_say_wholly_of_the_sites_takes_the_place_of_the_sites() -> None:
+    events = [
+        event for day in (MONDAY, WEDNESDAY, FRIDAY) for event in two_sites(day, WANTED, TYPED)
+    ]
+
+    found = steps.beside(
+        miner.recurring(miner.sessions(events)), steps.recurring(miner.sessions(events))
+    )
+
+    assert [(candidate.sites, candidate.steps is not None) for candidate in found] == [
+        (("a.example", "b.example"), True)
+    ]
+
+
+def test_the_sites_stay_when_the_steps_were_seen_on_fewer_days() -> None:
+    events: list[activity.Event] = []
+    for day in (MONDAY, TUESDAY, WEDNESDAY, FRIDAY):
+        # Another click on a on Tuesday: the sites recur on four days, the steps on three.
+        first = WANTED if day != TUESDAY else 'button[data-testid="other"]'
+        events += two_sites(day, first, TYPED)
+
+    sittings = miner.sessions(events)
+
+    found = steps.beside(miner.recurring(sittings), steps.recurring(sittings))
+
+    # Strongest first: the sites on four days, then the steps on three.
+    assert [(candidate.days, candidate.steps is not None) for candidate in found] == [
+        (4, False),
+        (3, True),
+    ]
+
+
+def test_a_ritual_whose_order_varies_is_never_left_out() -> None:
+    """a and b in one order on two days and in the other on one. The set of them recurs. So
+    does a click on a and an input on b at the end of every day."""
+    clock = Clock(MONDAY)
+    monday = [
+        did("click", clock.now(), CELL, site="a.example"),
+        did("click", clock.now(), SAVE, site="a.example"),
+        did("input", clock.now(), FIELD, site="b.example", field="text"),
+    ]
+    clock = Clock(WEDNESDAY)
+    wednesday = [
+        did("click", clock.now(), CELL, site="b.example"),
+        did("click", clock.now(), SAVE, site="a.example"),
+        did("input", clock.now(), FIELD, site="b.example", field="text"),
+    ]
+    clock = Clock(FRIDAY)
+    friday = [
+        did("click", clock.now(), CELL, site="a.example"),
+        did("click", clock.now(), SAVE, site="a.example"),
+        did("input", clock.now(), FIELD, site="b.example", field="text"),
+    ]
+    sittings = miner.sessions([*monday, *wednesday, *friday])
+
+    found = steps.beside(
+        [*miner.recurring(sittings), *miner.clusters(sittings)],
+        steps.recurring(sittings),
+    )
+
+    assert sorted((candidate.order, candidate.steps is not None) for candidate in found) == [
+        ("fixed", True),
+        ("varies", False),
+    ]
+
+
+def test_the_sites_stay_when_the_steps_are_a_part_of_them() -> None:
+    """A click on a and an input on b every day, then another click on c each day. The steps
+    found are the first two; the sites found are a, b and c, which say more. As both were
+    seen on as many days and in as many sittings, the alphabet decides the order."""
+    events: list[activity.Event] = []
+    for at, day in enumerate((MONDAY, WEDNESDAY, FRIDAY)):
+        clock = Clock(day)
+        # Another name every day, and not another number: a digit is # in a step.
+        events += [
+            did("click", clock.now(), SAVE, site="a.example"),
+            did("input", clock.now(), FIELD, site="b.example", field="text"),
+            did("click", clock.now(), ("td", f'td[name="c{chr(97 + at)}"]'), site="c.example"),
+        ]
+
+    sittings = miner.sessions(events)
+
+    found = steps.beside(miner.recurring(sittings), steps.recurring(sittings))
+
+    assert [(candidate.sites, candidate.steps is not None) for candidate in found] == [
+        (("a.example", "b.example"), True),
+        (("a.example", "b.example", "c.example"), False),
+    ]
+
+
+# ------------------------------------------------------------- what is shown ---
+
+
+def test_the_lines_show_what_was_done_where_how_often_and_in_which_tab() -> None:
+    events = [*job(MONDAY, rounds=12), *job(WEDNESDAY, rounds=12), *job(FRIDAY, rounds=12)]
+    (found,) = steps.recurring(miner.sessions(events))
+
+    assert steps.lines(found.steps or ()) == [
+        '  steps:  1. click  /orders  td[name="qty-#"]  ×12  other tab',
+        '          2. click  /report  input[name="line-#"]  ×12  other tab',
+        '          3. input  /report  input[name="line-#"]  text  ×12',
+        '          4. click  /report  button[data-testid="save"]',
+    ]
+
+
+def test_no_step_shows_no_line() -> None:
+    assert steps.lines(()) == []
+
+
+def test_an_element_is_shown_cut_and_never_past_its_eightieth_character() -> None:
+    (step,) = steps.lines(
+        [
+            miner.Step(
+                "click",
+                "erp.example.com",
+                "/",
+                "button[" + "x" * 120 + "]",
+                None,
+                1,
+                False,
+            )
+        ]
+    )
+
+    assert step == "  steps:  1. click  /  " + "button[" + "x" * 73
