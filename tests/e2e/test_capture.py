@@ -492,6 +492,35 @@ def test_a_navigation_keeps_the_listener(
         recording.stop()
 
 
+def test_a_navigation_alone_is_no_event(
+    home: Path, browser: tuple[Browser, str], site: str
+) -> None:
+    """The older logger writes a line for each change of a tab's address. The capture does
+    not: a line is written for a click, an input, a submit or a select inside a page. A day
+    of reading and navigating shows nothing in the capture's record. Found on the first run
+    beside the older logger, on 2026-11-26: by eight it held 88 navigations, the capture none."""
+    own, address = browser
+    recording = record_on(home, address)
+    tab = own.tab(f"{site}/")
+    try:
+        listened(tab)
+        tab.go(f"{site}/second?token={QUERY}#top")
+        listened(tab)
+        waited_a_moment()
+
+        assert recording.events() == []
+        assert list((home / "watch").glob("activity-*.jsonl")) == []
+
+        # And the page it came to is listened to: the first click there is an event, with
+        # that page's site and path.
+        tab.click('[data-testid="save"]')
+        (event,) = until(lambda: recording.of_kind("click"), "a click event", 10)
+        assert (event.site, event.path) == ("127.0.0.1", "/second")
+    finally:
+        tab.close()
+        recording.stop()
+
+
 def test_stopping_the_capture_ends_its_thread_and_the_page_is_listened_to_no_more(
     home: Path, browser: tuple[Browser, str], site: str
 ) -> None:
