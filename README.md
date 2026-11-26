@@ -6,11 +6,12 @@ Local brains. Your browser. No credits, no cloud, no telemetry.
 agent loop, flows and the activity logger work, and so does a new capture of what a person
 does in a page. It is built and tested, and it is not yet the logger: before it replaces
 the old one it runs beside it for three days (see "The capture"). Under them: a lock
-file, 1,512 unit and contract tests, 55 tests on a real browser, strict types, lint,
+file, 1,512 unit and contract tests, 56 tests on a real browser, strict types, lint,
 three import contracts and a CI workflow. They pass on the machine this was built on
-(macOS, arm64). The last green run in CI, on GitHub's macOS runner, is
-[45764178471](https://github.com/AgenticTony/Seeress/actions/runs/45764178471): lint, types, three import contracts, the unit and contract tests, 55 on a real
-browser, and the egress check clean on every door.
+(macOS, arm64). The first green run in CI after the capture was published, on GitHub's
+macOS runner, is
+[45764178471](https://github.com/AgenticTony/Seeress/actions/runs/45764178471): lint, types, three import contracts, 1,512 unit and contract
+tests, 55 on a real browser, and the egress check clean on every door.
 
 **Not verified.** The personal door's acceptance was last proven on a throwaway Chromium
 that stands where your Chrome does, not on your Chrome. The new capture is proven the same
@@ -42,8 +43,8 @@ Built on open-source parts: browser-use for the browser, Ollama for the model,
 
 Both scripts run one command line, `python -m seeress.cli --profile personal|client`. The
 same command line is installed as `seeress` (in `.venv/bin`, after `uv sync`). Where this
-README writes `seeress <command>`, a door runs the same command:
-`./bin/seeress-personal <command>` or `./bin/seeress-client <command>`.
+README writes `seeress <command>`, a door runs the same command from the folder of the
+repository: `./bin/seeress-personal <command>` or `./bin/seeress-client <command>`.
 The profile decides three things, and each is closed on its own:
 
 - **Which model may answer.** Before each model request Seeress reads the hostname of the
@@ -67,8 +68,8 @@ The profile decides three things, and each is closed on its own:
 | Model-written code | `seeress/browser_api.py`: the prompt is built from the library's real helper list, and a step may use those helpers and plain builtins only |
 | Browser with no route out | `tests/e2e/test_route.py`, and the egress check, which asks for a page from an address that is not exempt and requires a refusal |
 | Nothing leaves the machine | `tools/egress_check.py`, a step in CI |
-| Only what an event holds leaves the record | `tests/unit/test_activity.py`, `tests/unit/test_capture.py`, `tests/contract/test_contracts.py` and 48 tests on a real browser in `tests/e2e/test_capture.py`: a site, a path without query or fragment, a tab, a second and an action. No title and no query reaches one |
-| Only what the browser did is a person's | `tests/e2e/test_capture.py`: 45 of its 48 tests are on a browser Seeress starts. A click, an input or a change that a script in the page made is not recorded, and a page that stops its events at the document does not silence the capture. Two ways a script has of making the browser trust its work are recorded as a person's: see the known limits |
+| Only what an event holds leaves the record | `tests/unit/test_activity.py`, `tests/unit/test_capture.py`, `tests/contract/test_contracts.py` and 49 tests on a real browser in `tests/e2e/test_capture.py`: a site, a path without query or fragment, a tab, a second and an action. No title and no query reaches one |
+| Only what the browser did is a person's | `tests/e2e/test_capture.py`: 46 of its 49 tests are on a browser Seeress starts. A click, an input or a change that a script in the page made is not recorded, and a page that stops its events at the document does not silence the capture. Two ways a script has of making the browser trust its work are recorded as a person's: see the known limits |
 | The capture reaches its browser and nothing else | the egress check's third door: the capture asks no model, and no other machine |
 | No proxy between Seeress and the browser | Each DevTools connection names no proxy: `tests/unit/test_capture.py`, `tests/unit/test_watcher.py`, `tests/unit/test_bodies.py`. Tried on the library: with a proxy named, a loopback address goes to it by default |
 | No proxy between Seeress and a model on this machine | `tests/unit/test_brain.py`: a request to a loopback address is sent through an opener that names no proxy, and a request to any other address the library's way. Tried on the library: with `http_proxy` named, a request to this machine went to the proxy. The egress check plants six proxy names, in both cases, and requires that no door used one |
@@ -188,12 +189,14 @@ start it again after a reboot.
 
 While both records exist, the mine reads both and `capture-review` shows both: a line for
 each day of the older logger too, with its events by kind, so that the two can be compared
-day by day before one replaces the other.
+day by day before one replaces the other. The two count different things. A day of reading
+and navigating shows lines in the older logger's record and none in the capture's. What can
+be compared is whether, in the hours and on the sites the older logger shows, the capture
+holds interactions.
 
 One line of the record, `~/.seeress/watch/activity-YYYYMMDD.jsonl`, holds the site, the
-path with no query and no fragment, the kind (`navigate`, `focus`, `click`, `input`,
-`submit`, `select`), the tab and the second. For a click, an input, a submit or a select it
-also says what was done, and never what a field held:
+path with no query and no fragment, the kind (`click`, `input`, `submit` or `select`), the
+tab and the second, and what was done, and never what a field held:
 
 - the element's tag;
 - how the element is named on its page: the first of a `data-testid`, an `id` that has no
@@ -220,6 +223,11 @@ What it does not do:
   told by its name and its site together: a page may name a cookie of its own as the marker
   is named, and that is no marker.
 - Take what a script in the page did for a person's, with two exceptions named below.
+- Record a navigation, or which tab is in front. A line is written only for a click, an
+  input, a submit or a select inside a page. The older logger writes a `navigate` line for
+  each change of a tab's address and a `focus` line for each look at it: those two kinds
+  are in the event's schema for its record, which the mine and the review read while both
+  records exist.
 - Move or delete any file of the old logger. `capture-review` reads its files to count
   them by day, and the mine reads them while both records exist. Only `activity-*.jsonl`
   is the capture's, and only its files are deleted.
@@ -236,11 +244,11 @@ uv run ruff check && uv run ruff format --check
 uv run mypy && uv run lint-imports
 ```
 
-Six of the 55 browser tests run the browser tool, and its library asks `127.0.0.1:9222`,
+Six of the 56 browser tests run the browser tool, and its library asks `127.0.0.1:9222`,
 then `:9223`, for a browser's version before it reads the address Seeress gave it. On a
 machine where your Chrome has remote debugging on, your Chrome is asked for it (see the
 known limits). Measured on 2026-11-26, each test alone under the recording hook: the
-other 49 ask nothing there. The six are the three in `tests/e2e/test_bodies.py` that
+other 50 ask nothing there. The six are the three in `tests/e2e/test_bodies.py` that
 call `bodies.ensure`, one in `tests/e2e/test_capture.py` and two in `tests/e2e/test_route.py`.
 
 Four rules, each learned the hard way:
