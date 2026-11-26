@@ -2,11 +2,13 @@
 
 Three things are found here, and all three are counted. Nothing in this module reads a
 file, reads the clock or asks a model: everything it needs comes in as an argument. What it
-gives out is a site, a path with its identifiers hidden, an hour and counts.
+gives out is a site, a path with its identifiers hidden, the steps of a task, an hour and
+counts.
 
 - A session is one sitting: a run of events with no hole in it and no outage.
-- A candidate is a sequence of two to six sites that turns up in sittings on different
-  days. A pattern repeated inside one sitting is not a workflow.
+- A candidate is a sequence that turns up in sittings on different days: of two to six
+  sites, or, for seeress.steps, of the steps of a task. A pattern repeated inside one
+  sitting is not a workflow.
 - A gap is time in the schedule for which the record holds nothing, or an outage of the
   logger.
 """
@@ -16,8 +18,8 @@ import re
 import time
 from bisect import bisect_left
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 
 from seeress.activity import (
     DEFAULT_SCHEDULE as DEFAULT_SCHEDULE,
@@ -130,19 +132,50 @@ def _session(events: list[Event]) -> Session:
 
 
 @dataclass(frozen=True)
-class _Visit:
-    """One visit to a site inside a sitting: every event of it, in order."""
+class Step:
+    """One step of a sequence of steps that recurs, as it is shown to the person.
 
+    kind is click, input, submit or select. path has its identifiers hidden. element is how
+    the element is told apart, with every digit as #. field is the kind of a field an input
+    went into, and None for every other step. repeats is how many events of one sitting the
+    step stood for, most often. other_tab says that in most sittings the step was done in
+    another tab than the one before it. Nothing here says what a field held. Nothing here is
+    sent to a model or remembered with a proposal.
+    """
+
+    kind: str
+    site: str
+    path: str
+    element: str
+    field: str | None
+    repeats: int
+    other_tab: bool
+
+
+@dataclass(frozen=True)
+class Unit:
+    """One thing that the sequence of a sitting is made of: a visit to a site, or a step.
+
+    key is what must be alike in two sittings for two units to be the same one. events are
+    the events of the sitting that the unit stands for, in order. step is what is shown of a
+    step (seeress.steps), and None for a visit.
+    """
+
+    key: str
     site: str
     events: tuple[Event, ...]
+    step: Step | None = None
 
 
 @dataclass(frozen=True)
 class Candidate:
-    """A sequence of sites that recurs across days, with the evidence for it.
+    """A sequence that recurs across days, with the evidence for it.
 
-    paths holds one tuple per site: the paths seen at that step, most common first and at
-    most three, with their identifier-like segments replaced by {}.
+    sites holds the site of every unit of the sequence, in order. paths holds one tuple per
+    unit: the paths seen there, most common first and at most three, with their
+    identifier-like segments replaced by {}. steps holds one Step per unit when the sequence
+    is one of steps, and None when it is one of sites. keys is what was found alike from day
+    to day: the sites, or the keys of the steps.
 
     order is "fixed" when the sites recur in this order, and "varies" when they recur as a
     set, in any order.
@@ -156,37 +189,92 @@ class Candidate:
     last_seen: str
     hour: int
     order: str = "fixed"
+    keys: tuple[str, ...] | None = None
+    steps: tuple[Step, ...] | None = None
 
 
-def recurring(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
-    """The sequences of two to six sites that occur in sittings on at least days different
+def visits(sitting: Session) -> list[Unit]:
+    """The sitting as one visit per run of events on the same site, in order.
+
+    Consecutive repeats are collapsed, so `A A B A B C` holds the block `A B C`.
+    """
+    found: list[Unit] = []
+    for event in sitting.events:
+        if found and found[-1].site == event.site:
+            found[-1] = Unit(event.site, event.site, (*found[-1].events, event))
+        else:
+            found.append(Unit(event.site, event.site, (event,)))
+    return found
+
+
+def once(sites: Sequence[str]) -> tuple[str, ...]:
+    """The sites with a site that comes again right after itself left out once. A site that
+    comes back after another is a return, and is kept."""
+    return tuple(site for at, site in enumerate(sites) if at == 0 or site != sites[at - 1])
+
+
+def recurring(
+    sittings: Sequence[Session],
+    days: int = 3,
+    *,
+    units: Callable[[Session], Sequence[Unit]] = visits,
+    sizes: tuple[int, int] = (LEAST_SITES, MOST_SITES),
+) -> list[Candidate]:
+    """The sequences, of the lengths given, that occur in sittings on at least days different
     days, most days first.
 
-    A sitting becomes its sequence of sites, one per visit, and every block of two to six
-    sites in it is counted. A block occurs in a sitting when it appears anywhere in it,
-    however many times. A block that another candidate holds as a contiguous block, and that
-    was seen on at least as many days, is left out: a five-site sequence that recurs brings
-    all its shorter parts with it.
+    A sitting becomes its sequence of units, and every block of the lengths given in it is
+    looked for. A block occurs in a sitting when it appears anywhere in it, however many
+    times. A block that another candidate holds as a contiguous block, and that was seen on
+    at least as many days, is left out: a five-site sequence that recurs brings all its
+    shorter parts with it.
+
+    A block is looked for only where the block one shorter, at the same place, recurs: a
+    sequence recurs only where its beginning does. So a long sequence costs no more than a
+    short one, and the search holds few blocks at once.
 
     Where two candidates were seen on as many days, the one seen in more sittings comes
     first. Where those are equal too, the one whose sites come first alphabetically.
     """
-    visits = [_visits(sitting) for sitting in sittings]
-    # The record holds many more blocks than recur, so first only the days of each block
-    # are counted, and the evidence is gathered for those on enough days alone.
-    days_of: dict[tuple[str, ...], set[str]] = {}
-    for sitting, sequence in zip(sittings, visits, strict=True):
-        for _, block in _blocks(sequence):
-            days_of.setdefault(block, set()).add(sitting.day)
-    enough = {block for block, seen in days_of.items() if len(seen) >= days}
+    sequences = [units(sitting) for sitting in sittings]
+    enough = _recurring(sequences, [sitting.day for sitting in sittings], days, sizes)
     occurrences: dict[tuple[str, ...], list[tuple[int, int]]] = {}
-    for index, sequence in enumerate(visits):
-        for position, block in _blocks(sequence):
-            if block in enough:
-                occurrences.setdefault(block, []).append((index, position))
-    found = [_candidate(block, where, sittings, visits) for block, where in occurrences.items()]
+    for index, sequence in enumerate(sequences):
+        keys = [unit.key for unit in sequence]
+        for size in range(sizes[0], sizes[1] + 1):
+            for position in range(len(keys) - size + 1):
+                block = tuple(keys[position : position + size])
+                if block in enough:
+                    occurrences.setdefault(block, []).append((index, position))
+    found = [_candidate(block, where, sittings, sequences) for block, where in occurrences.items()]
     kept = [candidate for candidate in found if not _covered(candidate, found)]
     return by_strength(kept)
+
+
+def _recurring(
+    sequences: Sequence[Sequence[Unit]],
+    days_of: Sequence[str],
+    days: int,
+    sizes: tuple[int, int],
+) -> set[tuple[str, ...]]:
+    """Every block, of the lengths given, that occurs in sittings on at least days days.
+
+    The blocks of the least length are all counted. A longer block is counted only where the
+    block one shorter, at the same place, is one that recurs.
+    """
+    least, most = sizes
+    keys = [[unit.key for unit in sequence] for sequence in sequences]
+    enough: set[tuple[str, ...]] = set()
+    for size in range(least, most + 1):
+        seen_on: dict[tuple[str, ...], set[str]] = {}
+        for index, sequence in enumerate(keys):
+            for position in range(len(sequence) - size + 1):
+                if size > least and tuple(sequence[position : position + size - 1]) not in enough:
+                    continue
+                block = tuple(sequence[position : position + size])
+                seen_on.setdefault(block, set()).add(days_of[index])
+        enough |= {block for block, seen in seen_on.items() if len(seen) >= days}
+    return enough
 
 
 def by_strength(candidates: Sequence[Candidate]) -> list[Candidate]:
@@ -203,37 +291,18 @@ def by_strength(candidates: Sequence[Candidate]) -> list[Candidate]:
     )
 
 
-def _visits(sitting: Session) -> list[_Visit]:
-    """The sitting as one visit per run of events on the same site, in order.
-
-    Consecutive repeats are collapsed, so `A A B A B C` holds the block `A B C`.
-    """
-    visits: list[_Visit] = []
-    for event in sitting.events:
-        if visits and visits[-1].site == event.site:
-            visits[-1] = _Visit(event.site, (*visits[-1].events, event))
-        else:
-            visits.append(_Visit(event.site, (event,)))
-    return visits
-
-
-def _blocks(sequence: Sequence[_Visit]) -> Iterator[tuple[int, tuple[str, ...]]]:
-    """Every block of two to six sites in the sequence, with where it starts."""
-    for size in range(LEAST_SITES, MOST_SITES + 1):
-        for position in range(len(sequence) - size + 1):
-            yield position, tuple(visit.site for visit in sequence[position : position + size])
-
-
 def _candidate(
     block: tuple[str, ...],
     where: Sequence[tuple[int, int]],
     sittings: Sequence[Session],
-    visits: Sequence[list[_Visit]],
+    sequences: Sequence[Sequence[Unit]],
 ) -> Candidate:
     """The candidate for one block, with its evidence gathered from every occurrence.
 
-    An occurrence starts at the first event of its first visit and ends at the last event of
-    its last.
+    An occurrence starts at the first event of its first unit and ends at the last of its
+    last. The evidence of a step is that of the first occurrence, with how many events the
+    step stood for taken as it was most often, and with another tab when it was so in more
+    sittings than not.
     """
     sittings_seen = {index for index, _ in where}
     per_day: Counter[str] = Counter(sittings[index].day for index in sittings_seen)
@@ -241,23 +310,50 @@ def _candidate(
     ends: list[str] = []
     hours: Counter[int] = Counter()
     paths: list[Counter[str]] = [Counter() for _ in block]
+    lengths: list[Counter[int]] = [Counter() for _ in block]
+    other_tabs = [0] * len(block)
+    first = sequences[where[0][0]][where[0][1] : where[0][1] + len(block)]
     for index, position in where:
-        chosen = visits[index][position : position + len(block)]
+        chosen = sequences[index][position : position + len(block)]
         start, end = chosen[0].events[0].ts, chosen[-1].events[-1].ts
         starts.append(start)
         ends.append(end)
         hours[int(start[11:13])] += 1
-        for step, visit in enumerate(chosen):
-            paths[step].update(_masked(event.path) for event in visit.events)
+        for at, unit in enumerate(chosen):
+            paths[at].update(masked(event.path) for event in unit.events)
+            lengths[at][len(unit.events)] += 1
+            other_tabs[at] += unit.step is not None and unit.step.other_tab
+    # A sequence is all visits or all steps. When its first unit is a step, each is one.
+    steps: list[Step] | None = None
+    if first[0].step is not None:
+        steps = []
+        for at, unit in enumerate(first):
+            step = unit.step
+            if step is not None:
+                steps.append(
+                    replace(
+                        step,
+                        repeats=_least_often_tied(lengths[at]),
+                        other_tab=2 * other_tabs[at] > len(where),
+                    )
+                )
     return Candidate(
-        block,
+        tuple(unit.site for unit in first),
         tuple(_most_common(counted) for counted in paths),
         len(per_day),
         dict(sorted(per_day.items())),
         min(starts),
         max(ends),
         _most_common_hour(hours),
+        "fixed",
+        block,
+        None if steps is None else tuple(steps),
     )
+
+
+def _least_often_tied(counted: Counter[int]) -> int:
+    """The number seen most often. Where two were seen as often, the smaller: it claims less."""
+    return min(key for key, count in counted.items() if count == max(counted.values()))
 
 
 def _most_common(counted: Counter[str]) -> tuple[str, ...]:
@@ -278,7 +374,7 @@ def _covered(candidate: Candidate, found: Sequence[Candidate]) -> bool:
     return any(
         other is not candidate
         and other.days >= candidate.days
-        and _holds(other.sites, candidate.sites)
+        and _holds(other.keys or (), candidate.keys or ())
         for other in found
     )
 
@@ -298,7 +394,7 @@ _UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 _HEX = re.compile(r"[0-9a-fA-F]{8,}")
 
 
-def _masked(path: str) -> str:
+def masked(path: str) -> str:
     """The path with every identifier-like segment replaced by {}.
 
     /invoices/7/top and /invoices/8/top are then one path, /invoices/{}/top. A candidate
@@ -424,7 +520,7 @@ def _cluster(
         hours[_hour_of_first(sitting, whole)] += 1
         for event in sitting.events:
             if event.site in paths:
-                paths[event.site][_masked(event.path)] += 1
+                paths[event.site][masked(event.path)] += 1
     ordered = sorted(whole, key=lambda site: (-holding[site].bit_count(), site))
     return Candidate(
         tuple(ordered),
@@ -675,10 +771,14 @@ def _confidence(value: object) -> int | None:
 def name_of(candidate: Candidate) -> str:
     """The name of the proposal for a candidate.
 
-    A sequence is named by its sites in their order. A ritual whose order varies is named by
-    its sites in alphabetical order: the order it is seen in changes from one run to the
-    next, and a proposal found again must be the same proposal, for a decision to follow it.
+    A sequence of sites is named by its sites in their order. A ritual whose order varies is
+    named by its sites in alphabetical order: the order it is seen in changes from one run to
+    the next, and a proposal found again must be the same proposal, for a decision to follow it.
+    A sequence of steps is named by its sites and by its steps: two tasks on one site must
+    never share a name.
     """
+    if candidate.steps is not None:
+        return name_for(once(candidate.sites), keys=candidate.keys or ())
     return name_for(candidate.sites if candidate.order == "fixed" else sorted(candidate.sites))
 
 

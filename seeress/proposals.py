@@ -287,18 +287,19 @@ class Proposal:
         )
 
 
-def name_for(sites: Sequence[str]) -> str:
+def name_for(sites: Sequence[str], *, keys: Sequence[str] | None = None) -> str:
     """The name of the proposal for a sequence of sites, which is the name of its flow.
 
     The same sites always have the same name, and two sequences that differ never share
     one. Each site is written with its dots and its underscores as hyphens, the sites are
-    joined by a hyphen and cut, and eight hexadecimal digits of a digest of the sites
-    follow. So the name is one a flow may have, whatever the sites.
+    joined by a hyphen and cut, and eight hexadecimal digits of a digest follow. The digest
+    is of the sites, or of keys when they are given: what tells two sequences on the same
+    sites apart. So the name is one a flow may have, whatever the sites.
     """
     shown = "-".join(site.replace(".", "-").replace("_", "-") for site in sites)
     shown = re.sub(r"[^a-z0-9-]", "", shown).lstrip("-")[:SHOWN_AT_MOST].rstrip("-")
-    digest = hashlib.sha256("\n".join(sites).encode("utf-8")).hexdigest()[:DIGEST_DIGITS]
-    return f"{shown or 'sites'}-{digest}"
+    digest = hashlib.sha256("\n".join(keys if keys is not None else sites).encode("utf-8"))
+    return f"{shown or 'sites'}-{digest.hexdigest()[:DIGEST_DIGITS]}"
 
 
 # --------------------------------------------------------- keeping a proposal ---
