@@ -619,9 +619,11 @@ def test_a_round_of_seven_steps_is_left_as_it_came() -> None:
 
 def test_a_step_done_twice_with_one_of_them_in_another_tab_is_not_said_to_be() -> None:
     clock = Clock(MONDAY)
+    # The second click is in another tab than the navigation before it, and the first click
+    # is the first event of the sitting: one of two, and not more than half.
     events = [
-        did("click", clock.now(), CELL, tab=TARGET),
-        went("erp.example.com", clock.now()),
+        did("click", clock.now(), CELL),
+        activity.Event(1, clock.now(), "navigate", "erp.example.com", "/", TARGET),
         did("click", clock.now(), CELL),
     ]
 
