@@ -2174,22 +2174,27 @@ def test_the_logger_connects_and_stops_when_its_time_is_up(
 def test_with_no_address_given_the_logger_reads_it_where_chrome_publishes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The lookup the personal door uses, and no other."""
+    """The lookup the personal door uses, and no other: where Chrome publishes the address
+    for this user. The stand-in notes the door it was asked for."""
     standing = Standing()
     asked: list[str | None] = []
+    doors: list[str] = []
 
     def connect(address: str | None, **options: object) -> Standing:
         asked.append(address)
         return standing
 
+    def published(door: str) -> dict[str, str]:
+        doors.append(door)
+        return {"BU_CDP_WS": "ws://127.0.0.1:9/published"}
+
     monkeypatch.setattr(capture, "connect", connect)
-    monkeypatch.setattr(
-        config, "browser_env", lambda profile: {"BU_CDP_WS": "ws://127.0.0.1:9/published"}
-    )
+    monkeypatch.setattr(config, "browser_env", published)
 
     assert capture.run(home=tmp_path, seconds=0.1) == 0
 
     assert asked == ["ws://127.0.0.1:9/published"]
+    assert doors == ["personal"]
 
 
 def test_when_chrome_publishes_no_address_the_logger_connects_to_nothing_and_says_so(
