@@ -9,6 +9,8 @@ import pytest
 
 from seeress import bodies, config
 
+from .cdp import Browser
+
 
 @pytest.fixture
 def home(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
@@ -40,3 +42,15 @@ def client_body() -> bodies.SeeressBody:
     body = bodies.body_for("client")
     assert isinstance(body, bodies.SeeressBody)
     return body
+
+
+@pytest.fixture
+def browser(home: Path) -> Iterator[tuple[Browser, str]]:
+    """A browser Seeress started, and a connection of the test's own to it."""
+    address = client_body().ensure_running(headless=True)
+    assert address is not None
+    own = Browser(address)
+    try:
+        yield own, address
+    finally:
+        own.close()
