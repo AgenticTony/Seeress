@@ -293,6 +293,9 @@ FIELDS = (
 
 ACCEPTED_ACTIONS = [
     pytest.param(click(), id="click"),
+    pytest.param(
+        click(fingerprint='button[data-testid="save\U0001f600"]'), id="a name with an emoji, whole"
+    ),
     pytest.param(click(tag="x-" + "a" * 98), id="a tag of 100 characters"),
     pytest.param(
         {
@@ -330,6 +333,11 @@ ACCEPTED_ACTIONS = [
 
 REFUSED_ACTIONS = [
     pytest.param({**click(), "action": "click"}, id="action that is not an object"),
+    # A name is made whole in the page. One that reaches the record with a surrogate
+    # unpaired cannot be written to a file, and is refused where it is read.
+    pytest.param(click(fingerprint="a\ud800"), id="a name with a high surrogate, unpaired"),
+    pytest.param(click(fingerprint="a\udc00"), id="a name with a low surrogate, unpaired"),
+    pytest.param(click(fingerprint="a\ud83db"), id="a name with a high surrogate before a letter"),
     pytest.param(click(tag="x-" + "a" * 99), id="a tag over 100 characters"),
     pytest.param({**click(), "action": ["click"]}, id="action that is a list"),
     pytest.param({**click(), "action": None}, id="action that is null"),
@@ -472,7 +480,7 @@ def test_the_rules_between_two_fields_are_written_where_the_fields_are() -> None
 
 A_STATUS = {
     "pid": 4242,
-    "state": "recording",
+    "state": "connected",  # what the capture writes; the command says "recording"
     "reason": None,
     "since": "2026-11-25T21:36:39",
     "events": 12,
@@ -480,7 +488,7 @@ A_STATUS = {
 }
 
 ACCEPTED_STATUSES = [
-    pytest.param(A_STATUS, id="recording"),
+    pytest.param(A_STATUS, id="connected"),
     pytest.param(
         {**A_STATUS, "state": "connected", "events": 0, "last_event": None}, id="connected"
     ),
@@ -508,6 +516,13 @@ REFUSED_STATUSES = [
     pytest.param({}, id="nothing"),
     pytest.param(
         {name: value for name, value in A_STATUS.items() if name != "since"}, id="no since"
+    ),
+    pytest.param(
+        {name: value for name, value in A_STATUS.items() if name != "reason"}, id="no reason"
+    ),
+    pytest.param(
+        {name: value for name, value in A_STATUS.items() if name != "last_event"},
+        id="no last event",
     ),
     pytest.param({**A_STATUS, "pid": 0}, id="no process"),
     pytest.param({**A_STATUS, "pid": -1}, id="a negative process"),
@@ -576,3 +591,17 @@ def test_the_times_of_the_status_are_the_times_of_an_event() -> None:
     assert (
         said["last_event"]["anyOf"][1]["pattern"] == ACTIVITY_EVENT["properties"]["ts"]["pattern"]
     )
+
+
+def test_the_reader_holds_the_shape_of_a_whole_fingerprint() -> None:
+    """The reader searches with the pattern the schema writes, and with no other rule: a
+    review found the schema taking a name the reader refused."""
+    written = ACTIVITY_EVENT["properties"]["action"]["properties"]["fingerprint"]
+
+    assert activity.FINGERPRINT_SHAPE.pattern == written["pattern"]
+
+
+def test_the_reader_requires_the_fields_the_schema_names() -> None:
+    """A report short of one is no report. A review found the reader taking one with no
+    reason and no last event, which the schema refuses."""
+    assert set(CAPTURE_STATUS["required"]) == capture.STATUS_REQUIRED

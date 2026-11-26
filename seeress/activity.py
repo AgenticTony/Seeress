@@ -70,6 +70,9 @@ TARGET_SHAPE = re.compile(r"^[0-9a-fA-F]{8}(?![\s\S])")
 # hyphen, and a click often lands on one, so a hyphen, a dot and an underscore may follow.
 TAG_SHAPE = re.compile(r"^[a-z][a-z0-9._-]*(?![\s\S])")
 FINGERPRINT_AT_MOST = 200
+# A name is made whole in the page: every character is whole or a pair of surrogates, and
+# never one alone, which no file could hold. A page may put one in an attribute.
+FINGERPRINT_SHAPE = re.compile(r"^(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\uD800-\uDFFF])*(?![\s\S])")
 # A page chooses the address of its tab and the name of its element. Before these bounds,
 # one click on a real browser wrote a line of 2 MB, and at 200 events a minute that was
 # 25 GB an hour from one tab.
@@ -209,7 +212,7 @@ def _action_in(data: object, kind: str) -> Action | None:
         and len(data["tag"]) <= TAG_AT_MOST
         and isinstance(data["fingerprint"], str)
         and 1 <= len(data["fingerprint"]) <= FINGERPRINT_AT_MOST
-        and _can_be_written(data["fingerprint"])
+        and _matches(FINGERPRINT_SHAPE, data["fingerprint"])
         and (
             field in FIELD_KINDS
             if kind == "input"
@@ -438,17 +441,6 @@ def path_at_most(path: str) -> str:
     where it makes an event, and the reader cuts one from the older logger's record: an event
     is cut the same way from either."""
     return path[:PATH_AT_MOST]
-
-
-def _can_be_written(text: str) -> bool:
-    """Whether a file can hold text, as UTF-8. A lone surrogate cannot be written, and a page
-    may put one in an attribute that names an element. An action with such a name is refused
-    where it is made, as it is where it is read back."""
-    try:
-        text.encode("utf-8")
-    except UnicodeEncodeError:
-        return False
-    return True
 
 
 def _from_address(data: Mapping[str, object], kind: str, target: object) -> Event | None:

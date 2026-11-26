@@ -56,6 +56,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 200,
+          "pattern": "^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])*(?![\\s\\S])",
           "description": "How the element is told apart on its page: its tag, and the first of data-testid, an id that has no digit in it, and a name that it has, with its digits replaced by #. An element that none of the three names is told apart by its place and the place of up to three parents. A value is cut at 200 characters and never inside one, and made well-formed: an unpaired surrogate becomes the replacement character. No attribute that holds prose names an element: not alt, not placeholder, not aria-label"
         },
         "field": {

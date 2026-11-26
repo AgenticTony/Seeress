@@ -13,7 +13,7 @@
     },
     "state": {
       "type": "string",
-      "description": "connected, recording, stopped, down or failed. A reader that meets a state it does not know shows it as it is"
+      "description": "connected, stopped, down or failed: what the capture writes of itself. The command says recording for connected. A reader that meets a state it does not know shows it as it is"
     },
     "reason": {
       "type": ["string", "null"],

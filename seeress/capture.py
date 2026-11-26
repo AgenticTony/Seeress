@@ -66,6 +66,9 @@ WORLD = "seeress"
 
 # What the capture says of itself, for capture-status to read.
 STATUS_FILE = "capture-status.json"
+# Every field a report holds. The shape is contracts/capture-status.schema.json, and a
+# contract test keeps the two in agreement: a report short of a field is no report.
+STATUS_REQUIRED = frozenset({"pid", "state", "reason", "since", "events", "last_event"})
 
 # How often the record is kept short again, and how long a count of events may wait
 # before it is written.
@@ -857,7 +860,7 @@ def _report(home: Path) -> dict[str, Any] | None:
         said = json.loads((home / "watch" / STATUS_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(said, dict):
+    if not isinstance(said, dict) or set(said) < STATUS_REQUIRED:
         return None
     state, pid, reason = said.get("state"), said.get("pid"), said.get("reason")
     since, events, last = said.get("since"), said.get("events"), said.get("last_event")
