@@ -59,18 +59,20 @@ def of(sitting: Session) -> list[Unit]:
     """The sitting as its steps, in order.
 
     Every click, input, submit and select is a step. An event with no action, a navigation or
-    a focus line of the older logger, is none. The same step twice in a row is one step, and
-    a round of steps done three times or more in a row is one round: each of its steps holds
-    the events of every time.
+    a focus line of the older logger, is none, and says nothing of where a step was done: a
+    step is in another tab when its tab is not the tab of the step before it.
+
+    The same step twice in a row is one step, and a round of steps done three times or more
+    in a row is one round: each of its steps holds the events of every time.
     """
     made: list[_Made] = []
     before: str | None = None
     for event in sitting.events:
         step = _of(event)
-        moved = before is not None and event.target != before
-        before = event.target
         if step is None:
             continue
+        moved = before is not None and event.target != before
+        before = event.target
         if made and made[-1].key == step.key:
             made[-1].events.append(event)
             made[-1].moved += moved

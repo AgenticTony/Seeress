@@ -139,7 +139,7 @@ class Step:
     the element is told apart, with every digit as #. field is the kind of a field an input
     went into, and None for every other step. repeats is how many events of one sitting the
     step stood for, most often. other_tab says that in most sittings the step was done in
-    another tab than the one before it. Nothing here says what a field held. Nothing here is
+    another tab than the step before it. Nothing here says what a field held. Nothing here is
     sent to a model or remembered with a proposal.
     """
 
@@ -308,7 +308,7 @@ def _candidate(
     An occurrence starts at the first event of its first unit and ends at the last of its
     last. The evidence of a step is that of the first occurrence, with how many events the
     step stood for taken as it was most often, and with another tab when it was so in more
-    sittings than not.
+    sittings than not. A sitting says so when more of its occurrences than not do.
     """
     sittings_seen = {index for index, _ in where}
     per_day: Counter[str] = Counter(sittings[index].day for index in sittings_seen)
@@ -317,7 +317,7 @@ def _candidate(
     hours: Counter[int] = Counter()
     paths: list[Counter[str]] = [Counter() for _ in block]
     lengths: list[Counter[int]] = [Counter() for _ in block]
-    other_tabs = [0] * len(block)
+    other_tabs: list[dict[int, list[bool]]] = [{} for _ in block]
     first = sequences[where[0][0]][where[0][1] : where[0][1] + len(block)]
     # A visit is shown by the paths seen in it. A step is one page already, and the path of
     # every event of it is not read again: in a month where one element is clicked and
@@ -333,7 +333,8 @@ def _candidate(
             if not on_steps:
                 paths[at].update(masked(event.path) for event in unit.events)
             lengths[at][len(unit.events)] += 1
-            other_tabs[at] += unit.step is not None and unit.step.other_tab
+            if unit.step is not None:
+                other_tabs[at].setdefault(index, []).append(unit.step.other_tab)
     # A sequence is all visits or all steps. When its first unit is a step, each is one.
     steps: list[Step] | None = None
     if first[0].step is not None:
@@ -345,7 +346,7 @@ def _candidate(
                     replace(
                         step,
                         repeats=_least_often_tied(lengths[at]),
-                        other_tab=2 * other_tabs[at] > len(where),
+                        other_tab=_in_another_tab(other_tabs[at]),
                     )
                 )
     return Candidate(
@@ -362,6 +363,14 @@ def _candidate(
         block,
         None if steps is None else tuple(steps),
     )
+
+
+def _in_another_tab(saids: Mapping[int, Sequence[bool]]) -> bool:
+    """Whether a step was done in another tab in more sittings than not. What a sitting
+    says is one vote for each of its occurrences, and it says so when more of them than
+    not do."""
+    saying = sum(1 for votes in saids.values() if 2 * sum(votes) > len(votes))
+    return 2 * saying > len(saids)
 
 
 def _least_often_tied(counted: Counter[int]) -> int:

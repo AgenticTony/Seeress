@@ -625,18 +625,91 @@ def test_a_round_of_seven_steps_is_left_as_it_came() -> None:
 
 
 def test_a_step_done_twice_with_one_of_them_in_another_tab_is_not_said_to_be() -> None:
+    # The first click is the first step of the sitting. The two that follow are alike, in one
+    # tab, and that tab is another than the tab of the step before them: one of two.
     clock = Clock(MONDAY)
-    # The second click is in another tab than the navigation before it, and the first click
-    # is the first event of the sitting: one of two, and not more than half.
     events = [
+        did("click", clock.now(), SAVE, tab=TARGET),
         did("click", clock.now(), CELL),
-        activity.Event(1, clock.now(), "navigate", "erp.example.com", "/", TARGET),
         did("click", clock.now(), CELL),
     ]
 
-    (only,) = steps.of(sitting_of(events))
+    (_, only) = steps.of(sitting_of(events))
 
     assert only.step is not None and (only.step.repeats, only.step.other_tab) == (2, False)
+
+
+def test_another_tab_is_judged_against_the_step_before_and_not_the_event_before() -> None:
+    """A click in one tab, a navigation in the other, the same click in the first tab again:
+    three clicks, each in the tab of the step before it. A navigation between two steps says
+    nothing of where a step was done."""
+    clock = Clock(MONDAY)
+    events: list[activity.Event] = []
+    for _ in range(3):
+        events += [
+            did("click", clock.now(), CELL),
+            activity.Event(1, clock.now(), "navigate", "erp.example.com", "/", TARGET),
+        ]
+
+    (only,) = steps.of(sitting_of(events))
+
+    assert only.step is not None and (only.step.repeats, only.step.other_tab) == (3, False)
+
+
+def test_another_tab_is_judged_by_sittings_and_not_by_occurrences() -> None:
+    """On Monday the two steps come six times, five of them with the second in another tab; on
+    Wednesday and Friday once, in the same tab. In more of the occurrences than not, and in one
+    sitting of three: not said."""
+    clock = Clock(MONDAY)
+    monday: list[activity.Event] = []
+    for at in range(6):
+        monday += [
+            did("click", clock.now(), SAVE, path="/menu"),
+            did("click", clock.now(), CELL, tab=TARGET if at < 5 else SOURCE),
+            did("click", clock.now(), ("td", f'td[name="other{chr(97 + at)}"]'), path="/elsewhere"),
+        ]
+    later: list[activity.Event] = []
+    for day in (WEDNESDAY, FRIDAY):
+        clock = Clock(day)
+        later += [
+            did("click", clock.now(), SAVE, path="/menu"),
+            did("click", clock.now(), CELL),
+            did("click", clock.now(), ("td", 'td[name="else"]'), path="/elsewhere"),
+        ]
+
+    (found,) = steps.recurring(miner.sessions([*monday, *later]))
+
+    assert [(step.kind, step.path) for step in found.steps or ()] == [
+        ("click", "/menu"),
+        ("click", "/"),
+    ]
+    assert [step.other_tab for step in found.steps or ()] == [False, False]
+
+
+def test_another_tab_is_said_when_more_sittings_than_not_say_it_however_many_occurrences() -> None:
+    """The mirror of the one before: on Monday six occurrences, none in another tab; on
+    Wednesday and Friday one each, in another tab. In two sittings of three, and in two
+    occurrences of eight: said."""
+    clock = Clock(MONDAY)
+    monday: list[activity.Event] = []
+    for at in range(6):
+        monday += [
+            did("click", clock.now(), SAVE, path="/menu"),
+            did("click", clock.now(), CELL),
+            did("click", clock.now(), ("td", f'td[name="other{chr(97 + at)}"]'), path="/elsewhere"),
+        ]
+    later: list[activity.Event] = []
+    for day in (WEDNESDAY, FRIDAY):
+        clock = Clock(day)
+        later += [
+            did("click", clock.now(), SAVE, path="/menu"),
+            did("click", clock.now(), CELL, tab=TARGET),
+            did("click", clock.now(), ("td", 'td[name="else"]'), path="/elsewhere"),
+        ]
+
+    (found,) = steps.recurring(miner.sessions([*monday, *later]))
+
+    assert [step.other_tab for step in found.steps or ()] == [False, True]
 
 
 def test_the_kind_of_a_field_tells_two_steps_apart() -> None:
