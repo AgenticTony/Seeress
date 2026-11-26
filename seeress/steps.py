@@ -11,6 +11,7 @@ told the kinds of the steps and nothing more of them. Nothing of a step is remem
 proposal.
 """
 
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -27,9 +28,6 @@ LEAST_STEPS, MOST_STEPS = 2, 12
 LEAST_ROUND, MOST_ROUND = 2, 6
 LEAST_ROUNDS = 3
 
-# What tells the parts of a key apart. No site, no path and no name of an element holds it.
-APART = "\x1f"
-
 # The most of an element that is shown.
 ELEMENT_AT_MOST = 80
 
@@ -38,8 +36,15 @@ _DIGIT = re.compile("[0-9]")
 
 @dataclass
 class _Made:
-    """A step of a sitting while the steps are made: what was done, and every event of it."""
+    """A step of a sitting while the steps are made: what was done, and every event of it.
 
+    key is what must be alike in two sittings for two steps to be the same one: the site,
+    the page with its identifiers hidden, what was done, the element with every digit as #,
+    and the kind of a field. It is written as JSON writes them: a page or a name may hold
+    any character, and two different steps never share a key.
+    """
+
+    key: str
     kind: str
     site: str
     path: str
@@ -47,11 +52,6 @@ class _Made:
     field: str | None
     events: list[Event]
     moved: int
-
-    @property
-    def key(self) -> str:
-        """What must be alike in two sittings for two steps to be the same one."""
-        return APART.join((self.site, self.path, self.kind, self.element, self.field or ""))
 
 
 def of(sitting: Session) -> list[Unit]:
@@ -139,11 +139,13 @@ def _of(event: Event) -> _Made | None:
     action = event.action
     if action is None:
         return None
+    path, element = miner.masked(event.path), _DIGIT.sub("#", action.fingerprint)
     return _Made(
+        json.dumps([event.site, path, action.type, element, action.field or ""], ensure_ascii=True),
         action.type,
         event.site,
-        miner.masked(event.path),
-        _DIGIT.sub("#", action.fingerprint),
+        path,
+        element,
         action.field,
         [],
         0,

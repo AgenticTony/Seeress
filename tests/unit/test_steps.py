@@ -643,3 +643,21 @@ def test_the_kind_of_a_field_tells_two_steps_apart() -> None:
 
     assert [unit.step.field if unit.step else None for unit in found] == ["text", "search"]
     assert all(len(unit.events) == 1 for unit in found)
+
+
+def test_a_page_or_a_name_that_holds_what_tells_a_key_apart_makes_no_other_step() -> None:
+    """The reader keeps a control character in the name of an element. What tells the parts of
+    a key apart is more than a character then: two different steps never share a key."""
+    # A character that would tell the parts of a key apart, if a key were its parts joined.
+    inside = "\x1f" + "click" + "\x1f"
+    clock = Clock(MONDAY)
+    events = [
+        did("click", clock.now(), ("td", "x" + inside + "y"), path="/a"),
+        did("click", clock.now(), ("td", "y"), path="/a" + inside + "x"),
+        did("click", clock.now(), CELL),
+    ]
+
+    found = steps.of(sitting_of(events))
+
+    assert len(found) == 3
+    assert len({unit.key for unit in found}) == 3
