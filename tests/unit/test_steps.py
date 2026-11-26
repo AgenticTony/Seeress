@@ -270,3 +270,124 @@ def test_twelve_rounds_are_one_round_of_twelve() -> None:
     found = steps.of(sitting_of(job(MONDAY, rounds=12)))
 
     assert [unit.step.repeats if unit.step else 0 for unit in found] == [12, 12, 12, 1]
+
+
+# -------------------------------------------------------- the search on steps ---
+
+
+def steps_of(found: miner.Candidate) -> list[tuple[str, str, int, bool]]:
+    return [(step.kind, step.path, step.repeats, step.other_tab) for step in found.steps or ()]
+
+
+def test_a_sequence_that_recurs_on_three_days_is_found_with_its_steps() -> None:
+    events = [*job(MONDAY), *job(WEDNESDAY), *job(FRIDAY)]
+
+    (found,) = steps.recurring(miner.sessions(events))
+
+    assert (found.days, found.sessions, found.hour) == (
+        3,
+        {MONDAY: 1, WEDNESDAY: 1, FRIDAY: 1},
+        9,
+    )
+    assert (found.first_seen, found.last_seen) == (f"{MONDAY}T09:00:01", f"{FRIDAY}T09:00:10")
+    assert found.sites == ("erp.example.com",) * 4
+    assert steps_of(found) == [
+        ("click", "/orders", 3, True),
+        ("click", "/report", 3, True),
+        ("input", "/report", 3, False),
+        ("click", "/report", 1, False),
+    ]
+
+
+def test_how_many_events_a_step_stood_for_is_what_it_stood_for_most_often() -> None:
+    many = [*job(MONDAY, rounds=3), *job(WEDNESDAY, rounds=12), *job(FRIDAY, rounds=12)]
+    few = [*job(MONDAY, rounds=3), *job(WEDNESDAY, rounds=5), *job(FRIDAY, rounds=12)]
+
+    (found,) = steps.recurring(miner.sessions(many))
+    (other,) = steps.recurring(miner.sessions(few))
+
+    assert [step.repeats for step in found.steps or ()] == [12, 12, 12, 1]
+    # Seen as often on two days, the smaller claims less.
+    assert [step.repeats for step in other.steps or ()] == [3, 3, 3, 1]
+
+
+def test_a_sequence_seen_on_two_days_is_not_found() -> None:
+    assert steps.recurring(miner.sessions([*job(MONDAY), *job(TUESDAY)])) == []
+
+
+def test_work_that_differs_every_day_is_not_found() -> None:
+    clock = Clock(MONDAY)
+    first = [did("click", clock.now(), CELL)]
+    clock = Clock(TUESDAY)
+    second = [did("click", clock.now(), SAVE)]
+    clock = Clock(WEDNESDAY)
+    third = [did("click", clock.now(), FIELD)]
+    clock = Clock(THURSDAY)
+    fourth = [did("input", clock.now(), FIELD, field="text")]
+
+    assert steps.recurring(miner.sessions([*first, *second, *third, *fourth])) == []
+
+
+def test_a_part_held_by_a_longer_sequence_is_left_out() -> None:
+    """The same three steps every day, and on the first two days a fourth after them. The
+    three are found. On their own the first two would be found too, and are left out."""
+    events = [
+        *job(MONDAY)[:3],
+        did("click", f"{MONDAY}T09:00:04", SAVE),
+        *job(WEDNESDAY)[:3],
+        did("click", f"{WEDNESDAY}T09:00:04", SAVE),
+        *job(FRIDAY)[:3],
+    ]
+
+    found = steps.recurring(miner.sessions(events))
+
+    # The sitting begins with the first step, so it was not done in another tab.
+    assert [steps_of(candidate) for candidate in found] == [
+        [
+            ("click", "/orders", 1, False),
+            ("click", "/report", 1, True),
+            ("input", "/report", 1, False),
+        ]
+    ]
+
+
+def test_two_tasks_on_one_site_never_share_a_name() -> None:
+    events: list[activity.Event] = []
+    for day in (MONDAY, WEDNESDAY, FRIDAY):
+        clock = Clock(day, 10)
+        events += [
+            *job(day),
+            went("erp.example.com", f"{day}T10:00:00"),
+            did("input", clock.now(), FIELD, path="/search", field="search"),
+            did("click", clock.now(), SAVE, path="/search"),
+        ]
+
+    found = steps.recurring(miner.sessions(events))
+    names = {miner.name_of(candidate) for candidate in found}
+
+    assert len(found) == 2 and len(names) == 2
+    for name in names:
+        assert name.startswith("erp-example-com-") and proposals.NAME_SHAPE.fullmatch(name)
+
+
+def test_the_name_of_a_sequence_of_steps_is_what_a_flow_may_have() -> None:
+    (found,) = steps.recurring(miner.sessions([*job(MONDAY), *job(WEDNESDAY), *job(FRIDAY)]))
+
+    name = miner.name_of(found)
+
+    assert name == "erp-example-com-" + name.rsplit("-", 1)[1]
+    assert proposals.NAME_SHAPE.fullmatch(name)
+
+
+def test_the_model_is_told_the_kinds_of_the_steps_and_no_page_and_no_element() -> None:
+    events = [*job(MONDAY), *job(WEDNESDAY), *job(FRIDAY)]
+    (found,) = steps.recurring(miner.sessions(events))
+
+    prompt = miner.prompt_for([found])
+
+    assert (
+        "sites: erp.example.com (always in this order) · steps: click, click, input, click"
+        in prompt
+    )
+    assert "orders" not in prompt and "report" not in prompt and "qty" not in prompt
+    assert "line-#" not in prompt and "save" not in prompt.split("Answer with")[0]

@@ -12,11 +12,12 @@ proposal.
 """
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from seeress import miner
 from seeress.activity import Event
-from seeress.miner import Session, Step, Unit
+from seeress.miner import Candidate, Session, Step, Unit
 
 # A sequence shorter than this says nothing about a task, and a longer one is several.
 LEAST_STEPS, MOST_STEPS = 2, 12
@@ -77,6 +78,15 @@ def of(sitting: Session) -> list[Unit]:
             step.moved = int(moved)
             made.append(step)
     return [_unit(one) for one in _once_a_round(made)]
+
+
+def recurring(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
+    """The sequences of two to twelve steps that occur in sittings on at least days different
+    days, most days first, each with its steps as evidence.
+
+    The search is the one on sites (seeress.miner.recurring), on the steps of each sitting.
+    """
+    return miner.recurring(sittings, days, units=of, sizes=(LEAST_STEPS, MOST_STEPS))
 
 
 def _of(event: Event) -> _Made | None:

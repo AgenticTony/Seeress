@@ -682,9 +682,10 @@ def prompt_for(candidates: Sequence[Candidate]) -> str:
     """One prompt for every candidate: what a model may see of them, and the answer asked
     for.
 
-    A model may see a site, an hour and counts, and never a path. The answer is JSON and
-    nothing else: a list with one object for each number, holding its number, one sentence
-    on what the task may be, and a confidence from 1 to 5.
+    A model may see a site, an hour, counts and the kinds of the steps of a task, and never
+    a path or an element. The answer is JSON and nothing else: a list with one object for
+    each number, holding its number, one sentence on what the task may be, and a confidence
+    from 1 to 5.
     """
     lines = [
         "A person used a browser at work. Below are groups of sites that came up together",
@@ -696,10 +697,13 @@ def prompt_for(candidates: Sequence[Candidate]) -> str:
     for number, candidate in enumerate(candidates, start=1):
         order = "the order varies" if candidate.order == "varies" else "always in this order"
         seen = sum(candidate.sessions.values())
+        said = f"{number}. sites: {' → '.join(once(candidate.sites))} ({order})"
+        if candidate.steps is not None:
+            said += f" · steps: {', '.join(step.kind for step in candidate.steps)}"
         lines.append(
-            f"{number}. sites: {' → '.join(candidate.sites)} ({order})"
-            f" · usually starts at hour {candidate.hour}"
-            f" · seen on {candidate.days} days, in {seen} sessions"
+            said
+            + f" · usually starts at hour {candidate.hour}"
+            + f" · seen on {candidate.days} days, in {seen} sessions"
         )
     lines += [
         "",
