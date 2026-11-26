@@ -551,6 +551,28 @@ def test_a_site_that_ends_with_the_marker_s_is_not_the_marker_s() -> None:
     assert [command["method"] for command in sent] == ["Target.attachToTarget"] * 3
 
 
+def test_the_marker_held_as_a_domain_cookie_is_the_marker_all_the_same() -> None:
+    """Chrome keeps a cookie two ways: for its host alone, with the site as it is, and for
+    a domain, with a dot before the site. Seeress sets its marker the first way. Held the
+    other way, it is the marker all the same."""
+    sessions = capture.Sessions(lambda event: None)
+    contexts_id, targets_id, _, cookies_id = (command["id"] for command in sessions.opens())
+    sent: list[dict[str, Any]] = []
+    sent += sessions.hears(answer(contexts_id, contexts()), WHEN)
+    sent += sessions.hears(answer(targets_id, targets(info(), info(T2))), WHEN)
+    sent += sessions.hears(created(info("ABCDEFABCDEFABCDEFABCDEFABCDEFAB")), WHEN)
+    assert sent == []  # three tabs are held
+
+    with pytest.raises(CaptureError, match="This browser is Seeress's own"):
+        sessions.hears(
+            answer(cookies_id, {"cookies": [a_cookie_of(".seeress.invalid", capture.MARKER)]}),
+            WHEN,
+        )
+
+    assert sessions.listened == frozenset()
+    assert sessions.hears(created(info(T2, url="https://two.example/b")), WHEN) == []
+
+
 @pytest.mark.parametrize(
     "odd",
     [
@@ -1085,6 +1107,20 @@ def test_a_day_that_is_not_in_the_schedule_drops_every_event_of_it(tmp_path: Pat
 
     assert len(activity.read_events(tmp_path)) == 3
     assert gate.dropped == {"schedule": 6, "cap": 0}
+
+
+def test_an_event_outside_the_schedule_counts_as_that_and_not_as_over_the_cap(
+    tmp_path: Path,
+) -> None:
+    """The schedule is judged first. A burst outside the hours a person chose is dropped
+    for that reason alone, and the count says so: it does not read as a tab that was busy
+    in the hours kept."""
+    gate = capture.Gate(tmp_path)
+
+    passed(gate, clicks(250, first="2026-11-20T07:00:00"))  # Friday, before eight
+
+    assert activity.read_events(tmp_path) == []
+    assert gate.dropped == {"schedule": 250, "cap": 0}
 
 
 def test_the_schedule_of_the_gate_is_the_one_it_is_given(tmp_path: Path) -> None:
@@ -2543,6 +2579,32 @@ def test_a_settings_file_seeress_cannot_read_is_refused_by_the_entry_point(
     assert capture.main(["ws://127.0.0.1:9/x", "--home", str(tmp_path), "--seconds", "0.1"]) == 1
 
     assert "keep_days" in capsys.readouterr().err
+
+
+def test_the_entry_point_exits_one_and_says_why_when_the_status_cannot_be_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Chrome publishes no address, and the status that would say so cannot be written, as
+    on a full disk. The error is said as the other reasons are, and the exit is one. An
+    error left uncaught there ends the command with a traceback."""
+
+    def connect(address: str, **options: object) -> Standing:
+        raise AssertionError("nothing must be connected to")
+
+    def no_space(*args: object, **kwargs: object) -> None:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(capture, "connect", connect)
+    monkeypatch.setattr(config, "browser_env", lambda profile: {})
+    monkeypatch.setattr(capture, "write_status", no_space)
+    caplog.set_level(logging.ERROR, logger="seeress.capture")
+
+    said = capture.main(["--home", str(tmp_path)])
+
+    assert said == 1
+    assert [record.getMessage() for record in caplog.records] == [
+        "the capture cannot run: No space left on device"
+    ]
 
 
 # ------------------------------------------ what the seventh review found no test held ---
