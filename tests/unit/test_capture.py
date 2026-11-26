@@ -1292,6 +1292,23 @@ def test_the_status_file_holds_what_the_capture_says_of_itself(tmp_path: Path) -
     assert [path.name for path in (tmp_path / "watch").iterdir()] == ["capture-status.json"]
 
 
+def test_the_status_file_is_replaced_whole_and_never_rewritten_in_place(tmp_path: Path) -> None:
+    """A reader finds one report or the other, never none and never half of one. Shown by
+    a reader that opened the file before a report was written: after it, the reader still
+    holds the report it opened. A file rewritten in place would put the new one under its
+    eyes."""
+    capture.write_status(tmp_path, "connected", None, events=0, last_event=None, now=WHEN)
+    path = tmp_path / "watch" / "capture-status.json"
+
+    with path.open(encoding="utf-8") as reader:
+        capture.write_status(tmp_path, "stopped", None, events=3, last_event=TS, now=WHEN + 1)
+        held = reader.read()
+
+    assert json.loads(held)["state"] == "connected"
+    assert json.loads(path.read_text(encoding="utf-8"))["state"] == "stopped"
+    assert [each.name for each in path.parent.iterdir()] == ["capture-status.json"]
+
+
 def test_one_event_is_one_event(tmp_path: Path) -> None:
     said_to_be(tmp_path, "connected", None, events=1, last_event=TS)
 
