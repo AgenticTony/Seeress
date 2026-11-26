@@ -6,9 +6,9 @@ A person who copies from one place and pastes into another, in two tabs of one s
 leaves three alike events for every round.
 
 Nothing in this module reads a file, reads the clock or asks a model. A step is shown to the
-person as a page with its identifiers hidden and an element with every digit as #. A model is
-told the kinds of the steps and nothing more of them. Nothing of a step is remembered with a
-proposal.
+person as a page with its identifiers hidden and an element with every digit as #, both as
+data and never as a terminal reads them. A model is told the kinds of the steps and nothing
+more of them. Nothing of a step is remembered with a proposal.
 """
 
 import json
@@ -102,20 +102,21 @@ def beside(site_candidates: Sequence[Candidate], on_steps: Sequence[Candidate]) 
     kept = [
         candidate
         for candidate in site_candidates
-        if candidate.order != "fixed" or not any(_says_wholly(step, candidate) for step in on_steps)
+        if candidate.order != "fixed"
+        or not any(_says_wholly(found, candidate) for found in on_steps)
     ]
     return miner.by_strength([*kept, *on_steps])
 
 
-def _says_wholly(step: Candidate, of_sites: Candidate) -> bool:
+def _says_wholly(found: Candidate, of_sites: Candidate) -> bool:
     """Whether a sequence of steps says all a sequence of sites says, and more: the same sites
     in the same order, with a site that comes again right after itself counted once, and seen
     on as many days and in at least as many sittings. Seen on as many days and in fewer
     sittings, the sites say how often the work is done, and the steps do not."""
     return (
-        step.days >= of_sites.days
-        and sum(step.sessions.values()) >= sum(of_sites.sessions.values())
-        and miner.once(step.sites) == of_sites.sites
+        found.days >= of_sites.days
+        and sum(found.sessions.values()) >= sum(of_sites.sessions.values())
+        and miner.once(found.sites) == of_sites.sites
     )
 
 
@@ -187,7 +188,7 @@ def _of(event: Event) -> _Made | None:
 def _unit(one: _Made) -> Unit:
     """The step as a unit of the search, with what is shown of it.
 
-    A step was done in another tab than the event before it in more of its events than not,
+    A step was done in another tab than the step before it in more of its events than not,
     or it was not."""
     return Unit(
         one.key,
