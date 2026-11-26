@@ -551,3 +551,32 @@ def test_the_command_line_is_installed_as_seeress() -> None:
     project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
 
     assert project.get("scripts") == {"seeress": "seeress.cli:main"}
+
+
+@pytest.mark.parametrize(
+    ("argv", "name"),
+    [
+        (["capture-review"], "review"),
+        (["capture-forget", "--yes", "--before", "2026-10-10"], "forget"),
+        (["capture-status"], "status"),
+    ],
+)
+def test_a_command_of_the_record_that_meets_an_error_of_the_disk_exits_one_with_the_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    name: str,
+) -> None:
+    """A file that cannot be read or deleted, as on a full disk or in a folder the user
+    cannot open. Before, the error ended the command with a traceback."""
+    from seeress import capture
+
+    def refuse(*args: object, **kwargs: object) -> str:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(capture, name, refuse)
+
+    assert cli.main(argv) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "seeress error: No space left on device\n"

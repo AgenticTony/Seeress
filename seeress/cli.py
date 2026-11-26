@@ -265,6 +265,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     is in hand is closed and noted before the process goes, as when an error ends it. Until
     2026-11-25 closing the terminal ended the process with no note of a run of the agent,
     and its minutes were taken for the person's.
+
+    An error of the disk ends a command as an error of Seeress's own does, with the reason
+    said and the exit 1: a file that cannot be read or deleted is a reason, not a traceback.
     """
     args = list(sys.argv[1:] if argv is None else argv) or ["chat"]
     command, rest = _split(args)
@@ -272,7 +275,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     with _ending_cleanly():
         try:
             return _task(rest) if command is None else COMMANDS[command](rest)
-        except SeeressError as exc:
+        except (SeeressError, OSError) as exc:
             print(f"seeress error: {exc}", file=sys.stderr)
             return 1
         except Stopped:
