@@ -938,3 +938,22 @@ def test_the_model_is_told_one_line_of_a_task_and_nothing_more_of_it() -> None:
         "1. sites: erp.example.com (always in this order) · steps: click, click, input, click"
         " · usually starts at hour 9 · seen on 3 days, in 3 sessions"
     )
+
+
+def test_a_sitting_in_which_half_the_occurrences_are_in_another_tab_says_nothing() -> None:
+    """On each of three days the two steps come four times, twice with the second in another
+    tab: in half of twelve occurrences, and in no sitting more than half."""
+    events: list[activity.Event] = []
+    for at, day in enumerate((MONDAY, WEDNESDAY, FRIDAY)):
+        clock = Clock(day)
+        for round_ in range(4):
+            filler = ("td", f'td[name="other{word(at)}{chr(97 + round_)}"]')  # of its day alone
+            events += [
+                did("click", clock.now(), SAVE, path="/menu"),
+                did("click", clock.now(), CELL, tab=TARGET if round_ < 2 else SOURCE),
+                did("click", clock.now(), filler, path="/elsewhere"),
+            ]
+
+    (found,) = steps.recurring(miner.sessions(events))
+
+    assert [step.other_tab for step in found.steps or ()] == [False, False]
