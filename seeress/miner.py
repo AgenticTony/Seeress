@@ -247,7 +247,7 @@ def recurring(
                 if block in enough:
                     occurrences.setdefault(block, []).append((index, position))
     found = [_candidate(block, where, sittings, sequences) for block, where in occurrences.items()]
-    kept = [candidate for candidate in found if not _covered(candidate, found)]
+    kept = _uncovered(found)
     return by_strength(kept)
 
 
@@ -368,23 +368,24 @@ def _most_common_hour(hours: Counter[int]) -> int:
     return min(hour for hour, count in hours.items() if count == max(hours.values()))
 
 
-def _covered(candidate: Candidate, found: Sequence[Candidate]) -> bool:
-    """True when another candidate holds this one as a contiguous block, and was seen on at
-    least as many days."""
-    return any(
-        other is not candidate
-        and other.days >= candidate.days
-        and _holds(other.keys or (), candidate.keys or ())
-        for other in found
-    )
+def _uncovered(found: Sequence[Candidate]) -> list[Candidate]:
+    """The candidates that no other one holds as a contiguous block on at least as many days.
 
-
-def _holds(longer: tuple[str, ...], shorter: tuple[str, ...]) -> bool:
-    """True when shorter is a block of longer, and a proper part of it."""
-    size = len(shorter)
-    return len(longer) > size and any(
-        longer[position : position + size] == shorter for position in range(len(longer) - size + 1)
-    )
+    Every proper block of every candidate is marked with the most days of a candidate that
+    holds it. A candidate is left out when its own block is marked with as many days as its
+    own. So each candidate is looked at with its blocks alone, and not with every other one:
+    a record in which thousands of short sequences recur by coincidence is searched in the
+    time of the thousands, and not of their square.
+    """
+    held: dict[tuple[str, ...], int] = {}
+    for other in found:
+        keys = other.keys or ()
+        for size in range(2, len(keys)):
+            for position in range(len(keys) - size + 1):
+                block = keys[position : position + size]
+                if held.get(block, 0) < other.days:
+                    held[block] = other.days
+    return [candidate for candidate in found if held.get(candidate.keys or (), 0) < candidate.days]
 
 
 # What makes one segment of a path an identifier: a number, a UUID, or eight or more
