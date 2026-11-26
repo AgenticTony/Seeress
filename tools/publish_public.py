@@ -265,6 +265,8 @@ def publish(repo: Path) -> list[str]:
 def describe(repo: Path) -> str:
     """Say what the next publish would do."""
     planned = plan(repo)
+    if not planned.commits:
+        return "Nothing to publish: main stands where the last publish left it."
     tip = planned.commits[-1]
     tree = public_tree(repo, tip)
     leaking = holding(repo, tree, private_address(repo))

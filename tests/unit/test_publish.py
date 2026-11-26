@@ -289,3 +289,14 @@ def test_another_pre_push_hook_is_never_replaced(repo: Path) -> None:
         publish.install_guard(repo)
 
     assert hook.read_text() == "#!/bin/sh\necho something else\n"
+
+
+def test_saying_what_would_be_published_says_so_when_there_is_nothing(repo: Path) -> None:
+    """After a publish, and with nothing new on main. Asked for what was new, the command
+    once reached for a commit that was not there, and ended with an error of its own."""
+    publish.publish(repo)
+
+    text = publish.describe(repo)
+
+    assert "Nothing to publish" in text
+    assert "main stands where the last publish left it" in text
