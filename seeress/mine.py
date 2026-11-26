@@ -294,7 +294,7 @@ def _proposal_lines(proposal: Proposal, candidate: Candidate | None, *, home: Pa
             )
     if candidate is not None and candidate.steps is None:
         shown = " · ".join(
-            f"{site}: {', '.join(there)}"
+            f"{site}: {', '.join(steps.shown(path) for path in there)}"
             for site, there in zip(proposal.sites, candidate.paths, strict=True)
         )
         lines.append(f"  paths:  {shown}")

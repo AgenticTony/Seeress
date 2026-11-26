@@ -1063,3 +1063,24 @@ def test_the_report_says_when_a_task_goes_on_past_its_fiftieth_step(tmp_path: Pa
         '          50. input  /  td[name="fbx"]  text',
         "          (the task goes on past step 50; the rest is not shown)",
     ]
+
+
+def test_the_pages_of_a_proposal_on_sites_are_shown_as_data(tmp_path: Path) -> None:
+    """A browser encodes an address, and an address made by hand may hold anything. The paths
+    of a proposal on sites are shown as the steps show a page."""
+    write(
+        tmp_path,
+        "spike-20261116.jsonl",
+        *[
+            line
+            for day in THREE_DAYS
+            for line in (
+                visit("a", at(day, "09:00:00")),
+                visit("b", at(day, "09:01:00"), "/in\x1bvoices"),
+            )
+        ],
+    )
+
+    report = mine.mine(tmp_path, None, ask=None, now=NOW)
+
+    assert "  paths:  a.example: / · b.example: /in\\u001bvoices" in report

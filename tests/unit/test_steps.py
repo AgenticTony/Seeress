@@ -754,25 +754,62 @@ def test_a_name_with_a_line_break_in_it_adds_no_line_to_the_report() -> None:
 
 
 @pytest.mark.parametrize(
-    "chosen",
+    ("chosen", "written"),
     [
-        "\x1bc",  # ESC c: a terminal may read it as a command
-        "\x9bJ",  # CSI J
-        "\u202e",  # a right-to-left override
-        "\u200b",  # a zero-width space
-        "e\u0301",  # a letter and a combining mark: shown apart, and never as one sign
-        "\u2028",  # a line separator
+        ("\x1bc", "\\u001bc"),  # ESC c: a terminal may read it as a command
+        ("\x9bJ", "\\u009bJ"),  # CSI J
+        ("\x7f", "\\u007f"),  # DEL
+        ("\u202e", "\\u202e"),  # a right-to-left override
+        ("\u200b", "\\u200b"),  # a zero-width space
+        ("e\u0301", "e\\u0301"),  # a letter and a combining mark: shown apart
+        ("\u2028", "\\u2028"),  # a line separator
+        ("\U0001f600", "\\U0001f600"),  # above U+FFFF: eight digits, or it would read as two
+        ("\u115f", "\\u115f"),  # four letters that show nothing
+        ("\u1160", "\\u1160"),
+        ("\u3164", "\\u3164"),
+        ("\uffa0", "\\uffa0"),
     ],
-    ids=["escape", "csi", "override", "zero-width", "combining", "separator"],
+    ids=[
+        "escape",
+        "csi",
+        "del",
+        "override",
+        "zero-width",
+        "combining",
+        "separator",
+        "astral",
+        "filler-115f",
+        "filler-1160",
+        "filler-3164",
+        "filler-ffa0",
+    ],
 )
-def test_what_is_not_printable_nor_a_letter_nor_a_digit_is_shown_as_its_escape(chosen: str) -> None:
-    shown = steps.lines([miner.Step("click", "erp.example.com", "/", chosen, None, 1, False)])
+def test_what_is_not_shown_as_it_is_is_written_as_its_escape(chosen: str, written: str) -> None:
+    """An element's name is text a page chooses. What may change a line, drive a terminal, or
+    show nothing is written as its escape. The expected line is written here, and not made
+    with the rule the code uses."""
+    (line,) = steps.lines([miner.Step("click", "erp.example.com", "/", chosen, None, 1, False)])
 
-    (line,) = shown
-    assert line.startswith("  steps:  1. click  /  ")
-    assert line[len("  steps:  1. click  /  ") :] == "".join(
-        character if character.isalnum() else f"\\u{ord(character):04x}" for character in chosen
-    )
+    assert line == f"  steps:  1. click  /  {written}"
+
+
+@pytest.mark.parametrize(
+    "chosen",
+    ["\uff11", "\u0663", "f\u00f6retag", "\U0001d400", "a"],
+    ids=[
+        "a fullwidth digit",
+        "an Arabic digit",
+        "a letter with an accent",
+        "a bold letter",
+        "a letter",
+    ],
+)
+def test_a_letter_or_a_digit_of_any_script_is_shown_as_it_is(chosen: str) -> None:
+    """A letter of another script may look like another letter. It is shown as it is: it is the
+    name the page gave."""
+    (line,) = steps.lines([miner.Step("click", "erp.example.com", "/", chosen, None, 1, False)])
+
+    assert line == f"  steps:  1. click  /  {chosen}"
 
 
 def test_a_letter_of_any_script_and_a_page_are_shown_as_they_are() -> None:
@@ -1051,3 +1088,43 @@ def test_the_search_on_sites_does_not_join_its_windows() -> None:
 
     assert [len(candidate.sites) for candidate in found] == [6, 6, 6, 6]
     assert [candidate.further for candidate in found] == [False] * 4
+
+
+def test_two_guards_of_time_are_held_without_a_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A page is read once, when its step is made, and never again for the evidence of a
+    sequence on steps; and the evidence is built for the sequences kept alone. Counted, for a
+    unit test may read no clock."""
+    events = [*job(MONDAY, rounds=12), *job(WEDNESDAY, rounds=12), *job(FRIDAY, rounds=12)]
+    sittings = miner.sessions(events)
+    read: list[str] = []
+    masked = miner.masked
+
+    def reading(path: str) -> str:
+        read.append(path)
+        return masked(path)
+
+    monkeypatch.setattr(miner, "masked", reading)
+    built: list[tuple[str, ...]] = []
+    make = miner._candidate
+
+    def counting(
+        block: tuple[str, ...],
+        where: Sequence[tuple[int, int]],
+        at: Sequence[miner.Session],
+        sequences: Sequence[Sequence[miner.Unit]],
+        further: bool = False,
+    ) -> miner.Candidate:
+        built.append(block)
+        return make(block, where, at, sequences, further)
+
+    monkeypatch.setattr(miner, "_candidate", counting)
+
+    found = steps.recurring(sittings)
+    read_once, built_kept = len(read), sorted(built)
+    # The job is four steps, and its parts recur too: searched up to three steps, its two
+    # longer parts are proposals. At fifty all five are held, and their evidence is not built.
+    parts = miner.recurring(sittings, 3, units=steps.of, sizes=(2, 3))
+
+    assert read_once == sum(event.action is not None for event in events)
+    assert (len(parts), len(found), len(built_kept)) == (2, 1, 1)
+    assert built_kept == sorted(candidate.keys for candidate in found if candidate.keys)

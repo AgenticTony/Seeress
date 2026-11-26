@@ -34,6 +34,9 @@ ELEMENT_AT_MOST = 80
 
 _DIGIT = re.compile("[0-9]")
 
+# Four letters that show nothing: the fillers of Hangul. A reader would take them for a space.
+INVISIBLE = frozenset("\u115f\u1160\u3164\uffa0")
+
 
 @dataclass
 class _Made:
@@ -130,41 +133,48 @@ def lines(found: Sequence[Step]) -> list[str]:
     A line says what was done, the page, the element and at most ELEMENT_AT_MOST of it, the
     kind of a field, how many events of one sitting the step stood for when it was more than
     one, and `other tab` when in most sittings it was done in another tab than the step
-    before it. The page and the element are what a page chose, and are shown as _shown
+    before it. The page and the element are what a page chose, and are shown as `shown`
     shows them: as data, and never as a terminal reads them.
     """
-    shown: list[str] = []
+    made: list[str] = []
     for number, step in enumerate(found, start=1):
-        said = f"{number}. {step.kind}  {_shown(step.path)}  {_shown(step.element)}"
+        said = f"{number}. {step.kind}  {shown(step.path)}  {shown(step.element)}"
         if step.field:
             said += f"  {step.field}"
         if step.repeats > 1:
             said += f"  ×{step.repeats}"  # noqa: RUF001 - the sign of times, not a letter x
         if step.other_tab:
             said += "  other tab"
-        shown.append(("  steps:  " if number == 1 else "          ") + said)
-    return shown
+        made.append(("  steps:  " if number == 1 else "          ") + said)
+    return made
 
 
-def _shown(text: str) -> str:
+def shown(text: str) -> str:
     """What a page chose, as it may be shown.
 
     Every character that is neither printable ASCII nor a letter or a digit is written as its
     escape: a control, a format mark, a combining mark. So a name can add no line to a
-    report and drive no terminal, and a letter is never shown as another sign. At most
-    ELEMENT_AT_MOST characters are shown, and an escape is never cut.
+    report and drive no terminal, and a letter is never shown as another sign. The four
+    letters that show nothing are written as their escape too. Above U+FFFF an escape has
+    eight hexadecimal digits, so that it reads as one character. At most ELEMENT_AT_MOST
+    characters are shown, and an escape is never cut.
+
+    A letter of another script may look like another letter, and is shown as it is: it is
+    the name the page gave.
     """
-    shown = ""
+    written = ""
     for character in text:
-        part = (
-            character
-            if " " <= character <= "~" or character.isalnum()
-            else f"\\u{ord(character):04x}"
-        )
-        if len(shown) + len(part) > ELEMENT_AT_MOST:
+        plain = (" " <= character <= "~" or character.isalnum()) and character not in INVISIBLE
+        if plain:
+            part = character
+        elif ord(character) <= 0xFFFF:
+            part = f"\\u{ord(character):04x}"
+        else:
+            part = f"\\U{ord(character):08x}"
+        if len(written) + len(part) > ELEMENT_AT_MOST:
             break
-        shown += part
-    return shown
+        written += part
+    return written
 
 
 def _of(event: Event) -> _Made | None:
