@@ -957,3 +957,21 @@ def test_a_sitting_in_which_half_the_occurrences_are_in_another_tab_says_nothing
     (found,) = steps.recurring(miner.sessions(events))
 
     assert [step.other_tab for step in found.steps or ()] == [False, False]
+
+
+def test_the_strongest_holder_of_a_part_decides_and_not_the_last_looked_at() -> None:
+    """Five days of p, q, r; on three of them p, q, z comes later, with a site of its own on
+    either side. The pair p, q recurs on five days. It is held on five by p, q, r, and on
+    three by p, q, z, which is looked at after it: what the weaker says must not undo what
+    the stronger did."""
+    events: list[activity.Event] = []
+    for at, day in enumerate((MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY)):
+        clock = Clock(day)
+        sites = ["p", "q", "r", f"u{at}"]
+        if at < 3:
+            sites += [f"v{at}", "p", "q", "z", f"w{at}"]
+        events += [went(f"{site}.example", clock.now()) for site in sites]
+
+    found = miner.recurring(miner.sessions(events), sizes=(2, 6))
+
+    assert ("p.example", "q.example") not in [candidate.sites for candidate in found]
