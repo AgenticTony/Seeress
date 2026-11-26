@@ -92,24 +92,31 @@ def recurring(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
     return miner.recurring(sittings, days, units=of, sizes=(LEAST_STEPS, MOST_STEPS))
 
 
-def beside(sites: Sequence[Candidate], on_steps: Sequence[Candidate]) -> list[Candidate]:
+def beside(site_candidates: Sequence[Candidate], on_steps: Sequence[Candidate]) -> list[Candidate]:
     """The candidates found on sites and those found on steps, strongest first.
 
-    A sequence of sites is left out when a sequence of steps has its sites, in its order and
-    with a site that comes again right after itself counted once, and was seen on as many
-    days: the steps say all the sites say, and more. A ritual whose order varies is never
-    left out. The steps say one order, and the ritual says there is more than one.
+    A sequence of sites is left out when a sequence of steps says all it says, and more. A
+    ritual whose order varies is never left out. The steps say one order, and the ritual says
+    there is more than one.
     """
     kept = [
         candidate
-        for candidate in sites
-        if candidate.order != "fixed"
-        or not any(
-            step.days >= candidate.days and miner.once(step.sites) == candidate.sites
-            for step in on_steps
-        )
+        for candidate in site_candidates
+        if candidate.order != "fixed" or not any(_says_wholly(step, candidate) for step in on_steps)
     ]
     return miner.by_strength([*kept, *on_steps])
+
+
+def _says_wholly(step: Candidate, of_sites: Candidate) -> bool:
+    """Whether a sequence of steps says all a sequence of sites says, and more: the same sites
+    in the same order, with a site that comes again right after itself counted once, and seen
+    on as many days and in at least as many sittings. Seen on as many days and in fewer
+    sittings, the sites say how often the work is done, and the steps do not."""
+    return (
+        step.days >= of_sites.days
+        and sum(step.sessions.values()) >= sum(of_sites.sessions.values())
+        and miner.once(step.sites) == of_sites.sites
+    )
 
 
 def lines(found: Sequence[Step]) -> list[str]:

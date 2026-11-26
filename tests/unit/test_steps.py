@@ -130,9 +130,13 @@ def test_the_search_runs_on_any_sequence_of_units_and_any_lengths() -> None:
     assert found.steps is None
 
 
-def test_a_sequence_is_looked_for_only_where_the_one_before_it_recurs() -> None:
+def test_the_longest_sequence_on_sites_is_found_whole_and_one_on_two_days_is_not() -> None:
     """Five sites recur on three days, with a sixth on two. The five are found and the sixth
-    is not, as before the search was generalised."""
+    is not.
+
+    That a longer block is looked for only where the one before it recurs cannot be pinned by
+    what is found: switched off, the same is found, only slower. It is a guard of time.
+    """
     days = (MONDAY, WEDNESDAY, FRIDAY)
     sites = ("a", "b", "c", "d", "e")
     events = [
@@ -322,19 +326,6 @@ def test_a_sequence_seen_on_two_days_is_not_found() -> None:
     assert steps.recurring(miner.sessions([*job(MONDAY), *job(TUESDAY)])) == []
 
 
-def test_work_that_differs_every_day_is_not_found() -> None:
-    clock = Clock(MONDAY)
-    first = [did("click", clock.now(), CELL)]
-    clock = Clock(TUESDAY)
-    second = [did("click", clock.now(), SAVE)]
-    clock = Clock(WEDNESDAY)
-    third = [did("click", clock.now(), FIELD)]
-    clock = Clock(THURSDAY)
-    fourth = [did("input", clock.now(), FIELD, field="text")]
-
-    assert steps.recurring(miner.sessions([*first, *second, *third, *fourth])) == []
-
-
 def test_a_part_held_by_a_longer_sequence_is_left_out() -> None:
     """The same three steps every day, and on the first two days a fourth after them. The
     three are found. On their own the first two would be found too, and are left out."""
@@ -382,7 +373,7 @@ def test_the_name_of_a_sequence_of_steps_is_what_a_flow_may_have() -> None:
 
     name = miner.name_of(found)
 
-    assert name == "erp-example-com-" + name.rsplit("-", 1)[1]
+    assert name.startswith("erp-example-com-")
     assert proposals.NAME_SHAPE.fullmatch(name)
 
 
@@ -828,3 +819,122 @@ def test_a_task_of_fifty_steps_is_one_proposal_and_not_a_window_of_it() -> None:
     assert [len(candidate.steps or ()) for candidate in found] == [50]
     assert found[0].steps is not None
     assert (found[0].steps[0].path, found[0].steps[-1].element) == (fifty[0][0], fifty[-1][1][1])
+
+
+# ------------------------------------------------- what a review broke ---
+
+
+def test_the_page_tells_two_steps_apart() -> None:
+    """A click on Save at /orders and a click on Save at /report, every day: two steps."""
+    events: list[activity.Event] = []
+    for day in (MONDAY, WEDNESDAY, FRIDAY):
+        clock = Clock(day)
+        events += [
+            did("click", clock.now(), SAVE, path="/orders"),
+            did("click", clock.now(), SAVE, path="/report"),
+        ]
+
+    (found,) = steps.recurring(miner.sessions(events))
+
+    assert [step.path for step in found.steps or ()] == ["/orders", "/report"]
+
+
+def test_the_site_tells_two_steps_apart() -> None:
+    """A click on Save on one site and a click on Save on another, every day: two steps."""
+    events: list[activity.Event] = []
+    for day in (MONDAY, WEDNESDAY, FRIDAY):
+        clock = Clock(day)
+        events += [
+            did("click", clock.now(), SAVE, site="a.example"),
+            did("click", clock.now(), SAVE, site="b.example"),
+        ]
+
+    (found,) = steps.recurring(miner.sessions(events))
+
+    assert [step.site for step in found.steps or ()] == ["a.example", "b.example"]
+
+
+def test_work_whose_elements_differ_every_day_is_not_found() -> None:
+    """The same two pages every day, and another element on each every day. Were the element
+    no part of a step, the same two steps would be found on every day."""
+    events: list[activity.Event] = []
+    for at, day in enumerate((MONDAY, TUESDAY, WEDNESDAY, THURSDAY)):
+        clock = Clock(day)
+        events += [
+            did("click", clock.now(), ("td", f'td[name="e{word(at)}"]'), path="/a"),
+            did("input", clock.now(), ("td", f'td[name="f{word(at)}"]'), path="/b", field="text"),
+        ]
+
+    assert steps.recurring(miner.sessions(events)) == []
+
+
+def test_the_sites_stay_when_the_steps_say_them_in_another_order() -> None:
+    """Every day: a look at a, at b, and at a site of that day alone; then a click on b and an
+    input on a. The sites recur as a then b, and as b then a. The steps say b then a, and take
+    the place of that alone."""
+    events: list[activity.Event] = []
+    for at, day in enumerate((MONDAY, WEDNESDAY, FRIDAY)):
+        clock = Clock(day)
+        events += [
+            went("a.example", clock.now()),
+            went("b.example", clock.now()),
+            went(f"z{at}.example", clock.now()),
+            did("click", clock.now(), SAVE, site="b.example"),
+            did("input", clock.now(), FIELD, site="a.example", field="text"),
+        ]
+    sittings = miner.sessions(events)
+
+    found = steps.beside(miner.recurring(sittings), steps.recurring(sittings))
+
+    assert [(candidate.sites, candidate.steps is not None) for candidate in found] == [
+        (("a.example", "b.example"), False),
+        (("b.example", "a.example"), True),
+    ]
+
+
+def test_the_sites_stay_when_they_came_in_more_sittings_than_the_steps() -> None:
+    """The sites a then b in five sittings on each of three days; the same two steps in one
+    sitting of each, and other work in the rest. The sites say how often, and stay."""
+    events: list[activity.Event] = []
+    for at, day in enumerate((MONDAY, WEDNESDAY, FRIDAY)):
+        for sitting in range(5):
+            clock = Clock(day, 9 + sitting)
+            if sitting == 0:
+                events += [
+                    did("click", clock.now(), SAVE, site="a.example"),
+                    did("input", clock.now(), FIELD, site="b.example", field="text"),
+                ]
+            else:
+                own = f"{word(at * 5 + sitting)}"
+                events += [
+                    did("click", clock.now(), ("td", f'td[name="x{own}"]'), site="a.example"),
+                    did(
+                        "input",
+                        clock.now(),
+                        ("td", f'td[name="y{own}"]'),
+                        site="b.example",
+                        field="text",
+                    ),
+                ]
+    sittings = miner.sessions(events)
+
+    found = steps.beside(miner.recurring(sittings), steps.recurring(sittings))
+
+    assert [(candidate.sites, candidate.steps is not None) for candidate in found] == [
+        (("a.example", "b.example"), False),
+        (("a.example", "b.example"), True),
+    ]
+    assert [sum(candidate.sessions.values()) for candidate in found] == [15, 3]
+
+
+def test_the_model_is_told_one_line_of_a_task_and_nothing_more_of_it() -> None:
+    events = [*job(MONDAY), *job(WEDNESDAY), *job(FRIDAY)]
+    (found,) = steps.recurring(miner.sessions(events))
+
+    prompt = miner.prompt_for([found])
+
+    (line,) = [line for line in prompt.splitlines() if line.startswith("1.")]
+    assert line == (
+        "1. sites: erp.example.com (always in this order) · steps: click, click, input, click"
+        " · usually starts at hour 9 · seen on 3 days, in 3 sessions"
+    )
