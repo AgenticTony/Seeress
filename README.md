@@ -6,7 +6,7 @@ Local brains. Your browser. No credits, no cloud, no telemetry.
 agent loop, flows and the activity logger work, and so does a new capture of what a person
 does in a page. It is built and tested, and it is not yet the logger: before it replaces
 the old one it runs beside it for three days (see "The capture"). Under them: a lock
-file, 1,575 unit and contract tests, 59 tests on a real browser, strict types, lint,
+file, 1,593 unit and contract tests, 59 tests on a real browser, strict types, lint,
 three import contracts and a CI workflow. They pass on the machine this was built on
 (macOS, arm64). The first green run in CI after the capture was published, on GitHub's
 macOS runner, is
@@ -181,16 +181,17 @@ row is one step, and a round of two to six steps done three times or more in a r
 round, with how many times it came. `other tab` says the step was done in another tab than
 the step before it, in most sittings. A digit in the name or the place of an element is
 `#`, so one row of a grid matches any other. The steps are shown in the report of `mine`
-and are not remembered with the proposal. A task of up to fifty steps is one proposal; a
-longer one is proposed in windows of fifty, each with a name of its own.
+and are not remembered with the proposal. A task is one proposal by its first fifty
+steps, and when it goes on the report says so.
 
-The page and the name of an element are what a page chose, and are shown as data: a
-character that is neither printable, a letter nor a digit is shown as its escape.
+What a page chose is shown as data: the page and the name of an element, and the pages
+of a proposal on sites. A character that is neither printable ASCII, a letter nor a
+digit is shown as its escape.
 
-Two limits. A grid drawn as one element, as a spreadsheet in the browser may be, shows as
-one click on the grid, and a paste into it leaves no line. And a task that grows after
-its proposal was dismissed comes back under a new name, as a sequence of sites that
-grows does.
+Three limits. A grid drawn as one element, as a spreadsheet in the browser may be,
+shows as one click on the grid, and a paste into it leaves no line. The steps of a task
+past its fiftieth are not shown. And a task that grows after its proposal was dismissed
+comes back under a new name, as a sequence of sites that grows does.
 
 A proposal is evidence until you write its goal in your own words, and nothing is compiled
 from a model's sentence. What reaches a model about the record is a site, an hour,
