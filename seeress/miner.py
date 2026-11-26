@@ -282,20 +282,27 @@ def _recurring(
     """Every block, of the lengths given, that occurs in sittings on at least days days.
 
     The blocks of the least length are all counted. A longer block is counted only where the
-    block one shorter, at the same place, is one that recurs.
+    block one shorter, at the same place, is one that recurs: a sequence recurs only where its
+    beginning does. The places are kept, in which sitting and at what step, so that no block
+    is built again to be asked for.
     """
     least, most = sizes
     keys = [[unit.key for unit in sequence] for sequence in sequences]
     enough: set[tuple[str, ...]] = set()
+    where_recurring: set[tuple[int, int]] = set()
     for size in range(least, most + 1):
         seen_on: dict[tuple[str, ...], set[str]] = {}
+        at_place: dict[tuple[int, int], tuple[str, ...]] = {}
         for index, sequence in enumerate(keys):
             for position in range(len(sequence) - size + 1):
-                if size > least and tuple(sequence[position : position + size - 1]) not in enough:
+                if size > least and (index, position) not in where_recurring:
                     continue
                 block = tuple(sequence[position : position + size])
                 seen_on.setdefault(block, set()).add(days_of[index])
-        enough |= {block for block, seen in seen_on.items() if len(seen) >= days}
+                at_place[(index, position)] = block
+        found_now = {block for block, seen in seen_on.items() if len(seen) >= days}
+        enough |= found_now
+        where_recurring = {place for place, block in at_place.items() if block in found_now}
     return enough
 
 
