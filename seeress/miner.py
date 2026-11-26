@@ -246,8 +246,14 @@ def recurring(
                 block = tuple(keys[position : position + size])
                 if block in enough:
                     occurrences.setdefault(block, []).append((index, position))
-    found = [_candidate(block, where, sittings, sequences) for block, where in occurrences.items()]
-    kept = _uncovered(found)
+    # The evidence is gathered for the sequences kept alone. In a record where a long run
+    # recurs, every window of the run is found, and all but the longest are held.
+    held = _held(occurrences, sittings)
+    kept = [
+        _candidate(block, occurrences[block], sittings, sequences)
+        for block in occurrences
+        if block not in held
+    ]
     return by_strength(kept)
 
 
@@ -313,6 +319,10 @@ def _candidate(
     lengths: list[Counter[int]] = [Counter() for _ in block]
     other_tabs = [0] * len(block)
     first = sequences[where[0][0]][where[0][1] : where[0][1] + len(block)]
+    # A visit is shown by the paths seen in it. A step is one page already, and the path of
+    # every event of it is not read again: in a month where one element is clicked and
+    # clicked, that was most of the time of the search.
+    on_steps = first[0].step is not None
     for index, position in where:
         chosen = sequences[index][position : position + len(block)]
         start, end = chosen[0].events[0].ts, chosen[-1].events[-1].ts
@@ -320,7 +330,8 @@ def _candidate(
         ends.append(end)
         hours[int(start[11:13])] += 1
         for at, unit in enumerate(chosen):
-            paths[at].update(masked(event.path) for event in unit.events)
+            if not on_steps:
+                paths[at].update(masked(event.path) for event in unit.events)
             lengths[at][len(unit.events)] += 1
             other_tabs[at] += unit.step is not None and unit.step.other_tab
     # A sequence is all visits or all steps. When its first unit is a step, each is one.
@@ -339,7 +350,9 @@ def _candidate(
                 )
     return Candidate(
         tuple(unit.site for unit in first),
-        tuple(_most_common(counted) for counted in paths),
+        tuple((unit.step.path,) for unit in first if unit.step is not None)
+        if on_steps
+        else tuple(_most_common(counted) for counted in paths),
         len(per_day),
         dict(sorted(per_day.items())),
         min(starts),
@@ -368,24 +381,38 @@ def _most_common_hour(hours: Counter[int]) -> int:
     return min(hour for hour, count in hours.items() if count == max(hours.values()))
 
 
-def _uncovered(found: Sequence[Candidate]) -> list[Candidate]:
-    """The candidates that no other one holds as a contiguous block on at least as many days.
+def _held(
+    occurrences: Mapping[tuple[str, ...], Sequence[tuple[int, int]]],
+    sittings: Sequence[Session],
+) -> set[tuple[str, ...]]:
+    """The blocks that another one found holds as a contiguous block on at least as many days.
 
-    Every proper block of every candidate is marked with the most days of a candidate that
-    holds it. A candidate is left out when its own block is marked with as many days as its
-    own. So each candidate is looked at with its blocks alone, and not with every other one:
-    a record in which thousands of short sequences recur by coincidence is searched in the
-    time of the thousands, and not of their square.
+    Every proper block of a candidate is marked with the most days of a candidate that holds
+    it. A block is held when its own is marked with as many days as its own. So each block
+    is looked at with its blocks alone, and not with every other one: a record in which
+    thousands of short sequences recur by coincidence is searched in the time of the
+    thousands, and not of their square.
+
+    The longest are looked at first, and a block already held on as many days as its own
+    marks nothing: whatever holds it holds every block of it, on at least as many days. So a
+    long run that recurs is not marked block by block for every window of it.
     """
-    held: dict[tuple[str, ...], int] = {}
-    for other in found:
-        keys = other.keys or ()
-        for size in range(2, len(keys)):
-            for position in range(len(keys) - size + 1):
-                block = keys[position : position + size]
-                if held.get(block, 0) < other.days:
-                    held[block] = other.days
-    return [candidate for candidate in found if held.get(candidate.keys or (), 0) < candidate.days]
+    days_of = {
+        block: len({sittings[index].day for index, _ in where})
+        for block, where in occurrences.items()
+    }
+    marked: dict[tuple[str, ...], int] = {}
+    held: set[tuple[str, ...]] = set()
+    for block in sorted(days_of, key=lambda keys: (-len(keys), keys)):
+        if marked.get(block, 0) >= days_of[block]:
+            held.add(block)
+            continue
+        for size in range(2, len(block)):
+            for position in range(len(block) - size + 1):
+                part = block[position : position + size]
+                if marked.get(part, 0) < days_of[block]:
+                    marked[part] = days_of[block]
+    return held
 
 
 # What makes one segment of a path an identifier: a number, a UUID, or eight or more
