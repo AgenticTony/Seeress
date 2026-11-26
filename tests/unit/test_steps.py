@@ -48,6 +48,11 @@ def went(site: str, ts: str) -> activity.Event:
     return activity.Event(1, ts, "navigate", site, "/", SOURCE)
 
 
+def word(number: int) -> str:
+    """A number as four letters: a digit in a name or in a page is hidden, and letters are not."""
+    return "".join(chr(97 + (number // (26**at)) % 26) for at in range(4))
+
+
 class Clock:
     """A time of one day that goes on a second at a time."""
 
@@ -731,3 +736,22 @@ def test_nothing_of_a_page_reaches_the_report_as_the_terminal_reads_it() -> None
     )
 
     assert line == '  steps:  1. click  /a\\u001b[2Jb  td[name="x"]'
+
+
+def test_a_task_of_fifty_steps_is_one_proposal_and_not_a_window_of_it() -> None:
+    """A form of fifty fields filled the same way on three days: one proposal holds the whole
+    task. By windows of twelve it was thirty-nine proposals, each with a name of its own, and
+    a person who dismissed one had the rest to dismiss."""
+    fifty = [(f"/{word(at)}", ("td", f'td[name="f{word(at)}"]')) for at in range(50)]
+    events: list[activity.Event] = []
+    for day in (MONDAY, WEDNESDAY, FRIDAY):
+        clock = Clock(day)
+        events += [
+            did("input", clock.now(), element, path=path, field="text") for path, element in fifty
+        ]
+
+    found = steps.recurring(miner.sessions(events))
+
+    assert [len(candidate.steps or ()) for candidate in found] == [50]
+    assert found[0].steps is not None
+    assert (found[0].steps[0].path, found[0].steps[-1].element) == (fifty[0][0], fifty[-1][1][1])

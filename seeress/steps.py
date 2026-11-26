@@ -20,8 +20,9 @@ from seeress import miner
 from seeress.activity import Event
 from seeress.miner import Candidate, Session, Step, Unit
 
-# A sequence shorter than this says nothing about a task, and a longer one is several.
-LEAST_STEPS, MOST_STEPS = 2, 12
+# A sequence shorter than this says nothing about a task. Fifty is the most a task may hold to
+# be one proposal: a longer one is proposed in windows of fifty, each with a name of its own.
+LEAST_STEPS, MOST_STEPS = 2, 50
 
 # A round is from LEAST_ROUND to MOST_ROUND steps, one after the other, LEAST_ROUNDS times or
 # more. Twice may be a coincidence. Three times is a rhythm.
@@ -81,7 +82,7 @@ def of(sitting: Session) -> list[Unit]:
 
 
 def recurring(sittings: Sequence[Session], days: int = 3) -> list[Candidate]:
-    """The sequences of two to twelve steps that occur in sittings on at least days different
+    """The sequences of two to fifty steps that occur in sittings on at least days different
     days, most days first, each with its steps as evidence.
 
     The search is the one on sites (seeress.miner.recurring), on the steps of each sitting.
