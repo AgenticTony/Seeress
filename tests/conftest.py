@@ -66,6 +66,11 @@ def seeress_home_of_its_own(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     logger: it ran `watcher.start()`, which built the path from Path.home(). A test marked
     `e2e` was exempt until 2026-11-25: the seven tests on a real browser were then run with
     HOME on an empty folder, and passed, so none is exempt now.
+
+    seeress.watcher binds two of its paths when it is imported, from the home there was
+    then, and no change of home moves them. They are bound again here for every test:
+    before, one fixture line in one test module stood between six tests and the home the
+    run started in.
     """
     root = Path(tempfile.mkdtemp(prefix="sr-home-", dir=SHORT_TMP)).resolve()
     fake = root / "home"
@@ -73,6 +78,10 @@ def seeress_home_of_its_own(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     monkeypatch.setenv("SEERESS_HOME", str(fake / ".seeress"))
     monkeypatch.setenv("HOME", str(fake))
     monkeypatch.setattr(Path, "home", lambda: fake)
+    from seeress import config, watcher  # here and not above: after the home is the test's
+
+    monkeypatch.setattr(watcher, "WATCH_DIR", config.seeress_home() / "watch")
+    monkeypatch.setattr(watcher, "PORT_FILE", fake / config.CHROME_PORT_FILE)
     yield fake
     shutil.rmtree(root, ignore_errors=True)
 
