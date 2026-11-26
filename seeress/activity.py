@@ -5,10 +5,10 @@ carries a page title and a full address, query included. An event is the part th
 used: the site, the path without its query and its fragment, the kind of thing that
 happened, the tab, and the second. What reaches a model is the site, the hour, counts and
 the kinds of the steps of a task: a path and an element are shown to the person and never
-sent. So an event never carries a page title, typed
-text or a full URL. For the four kinds that happen in a page, an event may also say what was
-done there: the element's tag, how the element is told apart on its page and, for an input,
-the kind of the field. It never says what a field held.
+sent. So an event never carries a page title, typed text or a full URL. For the four kinds
+that happen in a page, an event may also say what was done there: the element's tag, how
+the element is told apart on its page and, for an input, the kind of the field. It never
+says what a field held.
 
 The shape of an event is contracts/activity-event.schema.json. Event.parse is that schema
 written by hand, and a contract test keeps the two in agreement. read_events turns the lines

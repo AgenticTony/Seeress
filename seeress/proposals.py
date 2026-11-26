@@ -71,7 +71,7 @@ OPTIONAL = frozenset({"steps"})
 
 
 @dataclass(frozen=True)
-class Step:
+class Intent:
     """One site of a flow, and what is done on it."""
 
     site: str
@@ -129,18 +129,18 @@ def _sites(value: object) -> tuple[str, ...] | None:
     return tuple(value)
 
 
-def _steps(value: object) -> tuple[Step, ...] | None:
+def _steps(value: object) -> tuple[Intent, ...] | None:
     """The steps of a flow or a proposal, or None when the schema would refuse them."""
     if not isinstance(value, list) or not 1 <= len(value) <= STEPS_AT_MOST:
         return None
-    steps: list[Step] = []
+    steps: list[Intent] = []
     for step in value:
         fields = _fields(step, STEP_FIELDS, frozenset())
         if fields is None or not (
             _matches(SITE_SHAPE, fields["site"]) and _text(fields["intent"], 1, INTENT_AT_MOST)
         ):
             return None
-        steps.append(Step(fields["site"], fields["intent"]))
+        steps.append(Intent(fields["site"], fields["intent"]))
     return tuple(steps)
 
 
@@ -156,7 +156,7 @@ def _sessions(value: object) -> dict[str, int] | None:
 
 def _read_flow_fields(
     fields: Mapping[str, Any], goal_least: int
-) -> tuple[str, str, tuple[str, ...], tuple[Step, ...] | None] | None:
+) -> tuple[str, str, tuple[str, ...], tuple[Intent, ...] | None] | None:
     """The name, the goal, the sites and the steps in the fields of a flow, or None when the
     schema would refuse any of them. The goal of a proposal may be empty, so the least length
     it may have comes in."""
@@ -180,7 +180,7 @@ class Flow:
     name: str
     goal: str
     sites: tuple[str, ...]
-    steps: tuple[Step, ...] | None = None
+    steps: tuple[Intent, ...] | None = None
 
     def as_dict(self) -> dict[str, object]:
         """The JSON object of the flow, with its fields in the schema's order."""
@@ -225,7 +225,7 @@ class Proposal:
     hour: int
     confidence: int | None
     status: str
-    steps: tuple[Step, ...] | None = None
+    steps: tuple[Intent, ...] | None = None
 
     def as_dict(self) -> dict[str, object]:
         """The JSON object of the proposal, with its fields in the schema's order."""

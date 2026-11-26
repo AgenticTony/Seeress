@@ -203,7 +203,7 @@ def test_a_flow_with_no_steps_holds_none_and_one_with_steps_holds_them() -> None
     with_steps = proposals.Flow.parse(flow(steps=[A_STEP]))
 
     assert bare.steps is None
-    assert with_steps.steps == (proposals.Step(A_SITE, "Open the folder Invoices"),)
+    assert with_steps.steps == (proposals.Intent(A_SITE, "Open the folder Invoices"),)
     assert "steps" not in bare.as_dict()
 
 
