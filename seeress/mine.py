@@ -5,7 +5,8 @@ reports. `show` shows one proposal, `set_goal` writes the goal in the user's own
 which approves it, and `dismiss` sets it aside. `progress` says what was proposed, what was
 compiled and how much each flow ran. It judges nothing.
 
-What reaches a model is a site, an hour and counts: never a path, a title or anything typed.
+What reaches a model is a site, an hour, counts and the kinds of the steps of a task: never
+a path, an element, a title or anything typed.
 And the model is one on this machine, by the guard. So nothing of the record leaves it.
 """
 

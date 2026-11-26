@@ -52,8 +52,9 @@ local time.
 It carries the host name in lower case without a leading `www.`, and the path with its query
 and its fragment removed. A tab is named by the first eight characters of its identifier as
 the browser writes them, which is hexadecimal in upper case. It never carries a page title,
-typed text, a query, a fragment or a full URL. What reaches a model is the site, the hour
-and counts: a path is shown to the person and never sent.
+typed text, a query, a fragment or a full URL. What reaches a model is the site, the hour,
+counts and the kinds of the steps of a task: a path and an element are shown to the person
+and never sent.
 
 For a `click`, an `input`, a `submit` and a `select`, and for no other kind, an event may
 carry an `action`: what was done in the page. It holds the element's tag, a fingerprint that

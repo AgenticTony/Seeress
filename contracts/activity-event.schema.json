@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "seeress://contracts/activity-event",
   "title": "Activity event",
-  "description": "One thing a person did in their browser, as everything that reads the activity record sees it. read_events in seeress/activity.py makes an event from a line of the record, and Event.parse there reads one back. An event is a site, a path with no query and no fragment, a kind, a tab and a second. For a click, an input, a submit and a select it may also carry an action, which says what was done in the page and never what a field held. It carries no page title, no typed text, no query, no fragment and no full URL. What reaches a model is the site, the hour and counts: a path is shown to the person and never sent.",
+  "description": "One thing a person did in their browser, as everything that reads the activity record sees it. read_events in seeress/activity.py makes an event from a line of the record, and Event.parse there reads one back. An event is a site, a path with no query and no fragment, a kind, a tab and a second. For a click, an input, a submit and a select it may also carry an action, which says what was done in the page and never what a field held. It carries no page title, no typed text, no query, no fragment and no full URL. What reaches a model is the site, the hour, counts and the kinds of the steps of a task: a path and an element are shown to the person and never sent.",
   "type": "object",
   "properties": {
     "v": {

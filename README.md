@@ -6,7 +6,7 @@ Local brains. Your browser. No credits, no cloud, no telemetry.
 agent loop, flows and the activity logger work, and so does a new capture of what a person
 does in a page. It is built and tested, and it is not yet the logger: before it replaces
 the old one it runs beside it for three days (see "The capture"). Under them: a lock
-file, 1,512 unit and contract tests, 56 tests on a real browser, strict types, lint,
+file, 1,546 unit and contract tests, 59 tests on a real browser, strict types, lint,
 three import contracts and a CI workflow. They pass on the machine this was built on
 (macOS, arm64). The first green run in CI after the capture was published, on GitHub's
 macOS runner, is
@@ -70,6 +70,7 @@ The profile decides three things, and each is closed on its own:
 | Nothing leaves the machine | `tools/egress_check.py`, a step in CI |
 | Only what an event holds leaves the record | `tests/unit/test_activity.py`, `tests/unit/test_capture.py`, `tests/contract/test_contracts.py` and 49 tests on a real browser in `tests/e2e/test_capture.py`: a site, a path without query or fragment, a tab, a second and an action. No title and no query reaches one |
 | Only what the browser did is a person's | `tests/e2e/test_capture.py`: 46 of its 49 tests are on a browser Seeress starts. A click, an input or a change that a script in the page made is not recorded, and a page that stops its events at the document does not silence the capture. Two ways a script has of making the browser trust its work are recorded as a person's: see the known limits |
+| The steps of a task: a model is told the kinds only, and nothing is remembered | `tests/unit/test_steps.py`, `tests/unit/test_mine.py` and 3 tests on a real browser in `tests/e2e/test_steps.py`: the prompt holds the kinds of the steps and no page or element, a proposal's file holds neither, and a copy-and-paste job between two tabs is found from three days |
 | The capture reaches its browser and nothing else | the egress check's third door: the capture asks no model, and no other machine |
 | No proxy between Seeress and the browser | Each DevTools connection names no proxy: `tests/unit/test_capture.py`, `tests/unit/test_watcher.py`, `tests/unit/test_bodies.py`. Tried on the library: with a proxy named, a loopback address goes to it by default |
 | No proxy between Seeress and a model on this machine | `tests/unit/test_brain.py`: a request to a loopback address is sent through an opener that names no proxy, and a request to any other address the library's way. Tried on the library: with `http_proxy` named, a request to this machine went to the proxy. The egress check plants six proxy names, in both cases, and requires that no door used one |
@@ -144,10 +145,12 @@ The activity logger notes which site you were on, and when. **Its record holds m
 that today.** The spike logger keeps each tab's address in full, query included, and its
 page title, in a plain file under your home. Seeress reads only the site, the path without
 the query, and the second from it. **A path is shown to you and never sent to a model.**
-What reaches a model about the record is a site, an hour of the day and counts. The capture
-described below also records a click, an input, a submit or a select, and never a title, a
-query or typed text. From the record Seeress finds the patterns of sites that come back on
-different days, and proposes them as flows.
+What reaches a model about the record is a site, an hour of the day, counts and the kinds
+of the steps of a task. The capture described below also records a click, an input, a submit
+or a select, and never a title, a query or typed text. From the record Seeress finds the
+patterns of sites that come back on different days, and the sequences of steps that do: the
+same clicks, inputs and submits in the same order, inside one site as well as across
+several. It proposes them as flows, and shows the steps of each.
 
 ```bash
 seeress mine                      # proposals from your own activity; the evidence first
@@ -161,9 +164,30 @@ seeress progress                  # what was proposed, compiled and run
 seeress proposal dismiss NAME
 ```
 
+A task inside one site shows its steps:
+
+```text
+erp-example-com-4c2b9e7a   proposed
+  sites:  erp.example.com
+  seen:   on 4 days, in 4 sittings; first 2026-11-26T09:14:02, last 2026-11-30T09:20:11; usually at hour 9
+  steps:  1. click  /orders  td[name="qty-#"]  ×12  other tab
+          2. click  /report  input[name="line-#"]  ×12  other tab
+          3. input  /report  input[name="line-#"]  text  ×12
+          4. click  /report  button[data-testid="save"]
+```
+
+A step is a click, an input, a submit or a select on one page. The same step twice in a
+row is one step, and a round of two to six steps done three times or more in a row is one
+round, with how many times it came. `other tab` says the step was done in another tab than
+the one before it. A digit in the name or the place of an element is `#`, so one row of a
+grid matches any other. The steps are shown in the report of `mine` and are not remembered
+with the proposal. A grid drawn as one element, as a spreadsheet in the browser may be,
+shows as one click on the grid, and a paste into it leaves no line.
+
 A proposal is evidence until you write its goal in your own words, and nothing is compiled
-from a model's sentence. What reaches a model about the record is a site, an hour and
-counts, and `mine` asks a model on the same machine only, through no proxy.
+from a model's sentence. What reaches a model about the record is a site, an hour,
+counts and the kinds of the steps, and `mine` asks a model on the same machine only,
+through no proxy.
 
 ### The capture
 
@@ -244,7 +268,7 @@ uv run ruff check && uv run ruff format --check
 uv run mypy && uv run lint-imports
 ```
 
-Six of the 56 browser tests run the browser tool, and its library asks `127.0.0.1:9222`,
+Six of the 59 browser tests run the browser tool, and its library asks `127.0.0.1:9222`,
 then `:9223`, for a browser's version before it reads the address Seeress gave it. On a
 machine where your Chrome has remote debugging on, your Chrome is asked for it (see the
 known limits). Measured on 2026-11-26, each test alone under the recording hook: the
