@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Any, TypedDict
 from urllib.parse import urlsplit
 
 from .config import PROFILES, domain_matches, is_loopback, load_settings
@@ -119,9 +119,23 @@ def chat(endpoint: Chosen, messages: Sequence[Message], timeout: float = 300) ->
     return str(answer)
 
 
+def _direct_opener() -> urllib.request.OpenerDirector:
+    """An opener that names no proxy, for a model on this machine.
+
+    urllib's own opener hands a request to a proxy that http_proxy names, a request to
+    this machine included: so a proxy would see the prompt, and could answer in the
+    model's place. A request to any other address keeps the library's way, since a
+    company may need its proxy to reach the model it pays for.
+    """
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _send(request: urllib.request.Request, timeout: float, name: str) -> bytes:
     """Send one request and return the body. The scheme is checked where the call is made."""
     if urlsplit(request.full_url).scheme not in {"http", "https"}:
         raise BrainError(f"{name} is not an http or https address; no request was sent")
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - checked above
+    opening: Any = urllib.request.urlopen
+    if is_loopback(request.full_url):
+        opening = _direct_opener().open
+    with opening(request, timeout=timeout) as response:
         return bytes(response.read())

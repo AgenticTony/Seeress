@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from email.message import Message as Headers
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,6 +21,12 @@ from seeress.errors import BrainError, ConfigError, GuardViolation
 CLOUD = brain.Chosen("glm", "https://api.z.ai/api/paas/v4", "", "secret-key")
 LOCAL = brain.Chosen("ollama-local", "http://localhost:11434/v1", "nemotron-3.5-lightning", "local")
 USER = brain.Message(role="user", content="hi")
+
+
+def answered_by(monkeypatch: pytest.MonkeyPatch, exchange: Any) -> None:
+    """The request reaches exchange, whichever way brain opens the address."""
+    monkeypatch.setattr(urllib.request, "urlopen", exchange)
+    monkeypatch.setattr(brain, "_direct_opener", lambda: SimpleNamespace(open=exchange))
 
 
 def guard(home: Path, *domains: str) -> None:
@@ -266,7 +273,7 @@ def test_chat_sends_one_openai_shaped_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     exchange = Exchange()
-    monkeypatch.setattr(urllib.request, "urlopen", exchange)
+    answered_by(monkeypatch, exchange)
 
     reply = brain.chat(LOCAL, [USER], timeout=7)
 
@@ -293,7 +300,7 @@ def test_an_http_error_names_the_endpoint_and_the_status(
     exchange = Exchange()
     exchange.status = 503
     exchange.body = b"upstream overloaded"
-    monkeypatch.setattr(urllib.request, "urlopen", exchange)
+    answered_by(monkeypatch, exchange)
 
     with pytest.raises(BrainError, match=r"ollama-local answered HTTP 503: upstream overloaded"):
         brain.chat(LOCAL, [USER])
@@ -305,7 +312,7 @@ def test_an_unreachable_endpoint_is_reported_not_crashed(
     def refuse(request: urllib.request.Request, timeout: float) -> io.BytesIO:
         raise urllib.error.URLError(OSError(61, "Connection refused"))
 
-    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    answered_by(monkeypatch, refuse)
 
     with pytest.raises(BrainError, match="ollama-local could not be reached"):
         brain.chat(LOCAL, [USER])
@@ -314,7 +321,7 @@ def test_an_unreachable_endpoint_is_reported_not_crashed(
 def test_an_answer_that_is_not_json_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     exchange = Exchange()
     exchange.body = b"<html>proxy login</html>"
-    monkeypatch.setattr(urllib.request, "urlopen", exchange)
+    answered_by(monkeypatch, exchange)
 
     with pytest.raises(BrainError, match="did not answer with JSON"):
         brain.chat(LOCAL, [USER])
@@ -323,7 +330,7 @@ def test_an_answer_that_is_not_json_is_reported(monkeypatch: pytest.MonkeyPatch)
 def test_an_answer_without_a_choice_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     exchange = Exchange()
     exchange.body = b'{"error": "model not found"}'
-    monkeypatch.setattr(urllib.request, "urlopen", exchange)
+    answered_by(monkeypatch, exchange)
 
     with pytest.raises(BrainError, match="no answer"):
         brain.chat(LOCAL, [USER])
@@ -333,7 +340,7 @@ def test_an_endpoint_that_is_not_http_is_refused_before_any_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     exchange = Exchange()
-    monkeypatch.setattr(urllib.request, "urlopen", exchange)
+    answered_by(monkeypatch, exchange)
     local_file = brain.Chosen("files", "file:///etc/passwd", "m", "local")
 
     with pytest.raises(BrainError, match="not an http or https address"):
@@ -346,7 +353,7 @@ def test_no_secret_appears_in_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(request: urllib.request.Request, timeout: float) -> io.BytesIO:
         raise urllib.error.URLError(OSError(61, "Connection refused"))
 
-    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    answered_by(monkeypatch, refuse)
 
     with pytest.raises(BrainError) as caught:
         brain.chat(CLOUD, [USER])
@@ -355,3 +362,49 @@ def test_no_secret_appears_in_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 GLM = config.Endpoint("glm", "https://api.z.ai/api/paas/v4", None, "ZAI_API_KEY")
+
+
+def test_the_model_on_this_machine_is_asked_through_no_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """urllib's own opener hands a request to a proxy that http_proxy names, a request to
+    this machine included. A proxy would see the prompt, and could answer in the model's
+    place. A review tried it: with http_proxy named, the request to the local model went to
+    the proxy."""
+    built: list[tuple[object, ...]] = []
+
+    class Opens:
+        def open(self, request: urllib.request.Request, timeout: float | None = None) -> io.BytesIO:
+            return io.BytesIO(b'{"choices": [{"message": {"content": "local"}}]}')
+
+    def build(*handlers: object) -> Opens:
+        built.append(handlers)
+        return Opens()
+
+    def the_default(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the default opener was used for a model on this machine")
+
+    monkeypatch.setattr(urllib.request, "build_opener", build)
+    monkeypatch.setattr(urllib.request, "urlopen", the_default)
+
+    assert brain.chat(LOCAL, [USER], timeout=7) == "local"
+    ((handler,),) = built  # one opener, made of one handler, and it names no proxy
+    assert isinstance(handler, urllib.request.ProxyHandler)
+    assert vars(handler) == vars(urllib.request.ProxyHandler({}))
+
+
+def test_a_model_that_is_not_on_this_machine_is_asked_the_default_way(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A company may need its proxy to reach the model it pays for: nothing changes for an
+    address that is not on this machine."""
+    exchange = Exchange()
+
+    def never(*handlers: object) -> None:
+        raise AssertionError("a special opener was built for an address that is not loopback")
+
+    monkeypatch.setattr(urllib.request, "build_opener", never)
+    monkeypatch.setattr(urllib.request, "urlopen", exchange)
+
+    assert brain.chat(CLOUD, [USER], timeout=7) == "hello there"
+    assert len(exchange.requests) == 1
