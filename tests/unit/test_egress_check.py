@@ -3,11 +3,13 @@ to run. The check itself starts browsers, against nothing here and for real in C
 
 import json
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from seeress import activity, config
 from seeress.egress import Finding
 from tools import egress_check
 from tools.egress_check import DOORS, Run, report
@@ -210,3 +212,16 @@ def test_a_kept_folder_is_named_to_the_one_who_asked_to_keep_it(
 
     egress_check.main([])
     assert "Kept:" not in capsys.readouterr().out
+
+
+def test_the_capture_s_schedule_in_its_door_is_the_whole_day(tmp_path: Path) -> None:
+    """So that the hour of the run is nothing to it. The end stayed at "23:00" when "24:00"
+    was taken elsewhere: the door failed from 23:00 to midnight, and CI runs the check on
+    every push."""
+    (tmp_path / "config.toml").write_text(egress_check.CAPTURE_SETTINGS, encoding="utf-8")
+
+    schedule = config.load_settings(tmp_path).capture.schedule
+
+    assert (schedule.start, schedule.end, len(schedule.days)) == (0, 23, 7)
+    late = time.mktime((2026, 11, 25, 23, 30, 0, 0, 0, -1))  # a Wednesday, half past eleven
+    assert activity.due(late, schedule)

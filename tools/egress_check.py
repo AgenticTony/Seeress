@@ -65,7 +65,7 @@ CAPTURE_SECONDS = "10"
 # The capture's schedule in its door: all day, so that the hour of the run is nothing.
 CAPTURE_SETTINGS = (
     '[capture]\ndays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]\n'
-    'from = "00:00"\nto = "23:00"\n'
+    'from = "00:00"\nto = "24:00"\n'
 )
 # 0.0.0.0 is this machine too, but it is not on a browser's exempt list the way 127.0.0.1
 # is. So the same page shows both outcomes without anything leaving the machine.
