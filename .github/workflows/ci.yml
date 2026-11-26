@@ -19,9 +19,13 @@ env:
   UV_PYTHON_DOWNLOADS: manual
 
 jobs:
+  # Each job is stopped from outside after this long. A test that does not end fails inside
+  # its own limit (tests/conftest.py). A run starved of the interpreter's lock by a thread a
+  # broken rule left turning cannot: without this it would hold a runner for six hours.
   static:
     name: Lint, types and import contracts
     runs-on: macos-15
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.4.0
@@ -43,6 +47,7 @@ jobs:
   tests:
     name: Unit tests
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.4.0
