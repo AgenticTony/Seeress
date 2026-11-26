@@ -534,3 +534,71 @@ def test_an_element_is_shown_cut_and_never_past_its_eightieth_character() -> Non
     )
 
     assert step == "  steps:  1. click  /  " + "button[" + "x" * 73
+
+
+# ------------------------------------------------- what the mutants found ---
+
+
+def test_a_step_done_three_times_with_one_of_them_in_another_tab_is_not_said_to_be() -> None:
+    clock = Clock(MONDAY)
+    events = [
+        did("click", clock.now(), CELL, tab=TARGET),
+        did("click", clock.now(), CELL),
+        did("click", clock.now(), CELL),
+    ]
+
+    (only,) = steps.of(sitting_of(events))
+
+    assert only.step is not None and (only.step.repeats, only.step.other_tab) == (3, False)
+
+
+def _said_of_another_tab(tabs: Sequence[str]) -> list[bool]:
+    """Four days, a sitting of three steps on each, the second and the third in the tab of its
+    day: what is said of each step about another tab than the one before it."""
+    events: list[activity.Event] = []
+    for day, tab in zip((MONDAY, TUESDAY, WEDNESDAY, THURSDAY), tabs, strict=True):
+        clock = Clock(day)
+        events += [
+            did("click", clock.now(), SAVE, path="/menu"),
+            did("click", clock.now(), CELL, tab=tab),
+            did("input", clock.now(), FIELD, field="text", tab=tab),
+        ]
+    (found,) = steps.recurring(miner.sessions(events))
+    return [step.other_tab for step in found.steps or ()]
+
+
+def test_a_step_is_said_to_be_in_another_tab_when_it_was_so_in_more_sittings_than_not() -> None:
+    assert _said_of_another_tab((SOURCE, SOURCE, TARGET, TARGET)) == [False, False, False]
+    assert _said_of_another_tab((SOURCE, TARGET, TARGET, TARGET)) == [False, True, False]
+
+
+def test_two_steps_on_the_first_site_still_take_the_place_of_the_sites() -> None:
+    events: list[activity.Event] = []
+    for day in (MONDAY, WEDNESDAY, FRIDAY):
+        clock = Clock(day)
+        events += [
+            did("click", clock.now(), CELL, site="a.example"),
+            did("click", clock.now(), SAVE, site="a.example"),
+            did("input", clock.now(), FIELD, site="b.example", field="text"),
+        ]
+    sittings = miner.sessions(events)
+
+    found = steps.beside(miner.recurring(sittings), steps.recurring(sittings))
+
+    assert [(candidate.sites, candidate.steps is not None) for candidate in found] == [
+        (("a.example", "a.example", "b.example"), True)
+    ]
+
+
+def test_a_sequence_of_twelve_steps_is_found_whole() -> None:
+    twelve = [(f"/{letter}", ("td", f'td[name="s{letter}"]')) for letter in "abcdefghijkl"]
+    events: list[activity.Event] = []
+    for day in (MONDAY, WEDNESDAY, FRIDAY):
+        clock = Clock(day)
+        events += [did("click", clock.now(), element, path=path) for path, element in twelve]
+
+    (found,) = steps.recurring(miner.sessions(events))
+
+    assert [(step.path, step.element) for step in found.steps or ()] == [
+        (path, element[1]) for path, element in twelve
+    ]

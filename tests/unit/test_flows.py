@@ -511,6 +511,16 @@ def test_the_description_is_the_goal_and_one_sentence_and_nothing_else() -> None
     assert "hour" not in description
 
 
+def test_the_compiler_is_told_a_site_once_when_it_comes_again_right_after_itself() -> None:
+    description = flows.description_for(
+        a_proposal(goal="Check.", sites=("a.example", "a.example", "b.example"))
+    )
+
+    assert description == (
+        "Check. The task visits these sites, in this order: a.example → b.example."
+    )
+
+
 def test_a_compiled_proposal_is_compiled_again_when_asked(flows_dir: Path, wired: Wire) -> None:
     proposals.remember(config.seeress_home(), a_proposal(status="compiled", goal="Check."))
     wired.replies = [FINAL]
