@@ -1877,7 +1877,9 @@ def test_a_recorder_that_failed_once_shows_no_error_while_it_runs_well_after(
     standing.refused = None
     recorder.start()
     try:
-        awaited(standing.let_in.is_set)
+        # Let in is not enough: the four are sent a moment after the connection is made,
+        # and a test that read them at once read three of them, once in a dozen runs.
+        awaited(lambda: len(standing.sent) == 4)
         assert standing.sent == [  # once: a second start starts nothing more
             '{"id": 1, "method": "Target.setDiscoverTargets", "params": {"discover": true}}',
             '{"id": 2, "method": "Target.getBrowserContexts", "params": {}}',
