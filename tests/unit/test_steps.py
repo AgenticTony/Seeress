@@ -6,6 +6,8 @@ answers with one text and remembers what it was asked.
 
 from collections.abc import Sequence
 
+import pytest
+
 from seeress import activity, miner, proposals, steps
 
 MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY = (
@@ -661,3 +663,71 @@ def test_a_page_or_a_name_that_holds_what_tells_a_key_apart_makes_no_other_step(
 
     assert len(found) == 3
     assert len({unit.key for unit in found}) == 3
+
+
+# ------------------------------------------------- what a page chose to name ---
+
+
+def test_a_name_with_a_line_break_in_it_adds_no_line_to_the_report() -> None:
+    """An element's name is text a page chooses. A line break in it made a second line of the
+    report, in the report's own words. It is shown as its escape."""
+    forged = 'button[id="Save\n  seen:   on 99 days, in 99 sittings"]'
+
+    (line,) = steps.lines([miner.Step("click", "erp.example.com", "/", forged, None, 1, False)])
+
+    assert (
+        line
+        == '  steps:  1. click  /  button[id="Save\\u000a  seen:   on 99 days, in 99 sittings"]'
+    )
+    assert (
+        len(steps.lines([miner.Step("click", "erp.example.com", "/", forged, None, 1, False)])) == 1
+    )
+
+
+@pytest.mark.parametrize(
+    "chosen",
+    [
+        "\x1bc",  # ESC c: a terminal may read it as a command
+        "\x9bJ",  # CSI J
+        "\u202e",  # a right-to-left override
+        "\u200b",  # a zero-width space
+        "e\u0301",  # a letter and a combining mark: shown apart, and never as one sign
+        "\u2028",  # a line separator
+    ],
+    ids=["escape", "csi", "override", "zero-width", "combining", "separator"],
+)
+def test_what_is_not_printable_nor_a_letter_nor_a_digit_is_shown_as_its_escape(chosen: str) -> None:
+    shown = steps.lines([miner.Step("click", "erp.example.com", "/", chosen, None, 1, False)])
+
+    (line,) = shown
+    assert line.startswith("  steps:  1. click  /  ")
+    assert line[len("  steps:  1. click  /  ") :] == "".join(
+        character if character.isalnum() else f"\\u{ord(character):04x}" for character in chosen
+    )
+
+
+def test_a_letter_of_any_script_and_a_page_are_shown_as_they_are() -> None:
+    (line,) = steps.lines(
+        [
+            miner.Step(
+                "input",
+                "erp.example.com",
+                "/beställningar/{}",
+                'input[name="företag"]',
+                "text",
+                1,
+                False,
+            )
+        ]
+    )
+
+    assert line == '  steps:  1. input  /beställningar/{}  input[name="företag"]  text'
+
+
+def test_nothing_of_a_page_reaches_the_report_as_the_terminal_reads_it() -> None:
+    """A page is encoded in an address by the browser, and is escaped here all the same."""
+    (line,) = steps.lines(
+        [miner.Step("click", "erp.example.com", "/a\x1b[2Jb", 'td[name="x"]', None, 1, False)]
+    )
+
+    assert line == '  steps:  1. click  /a\\u001b[2Jb  td[name="x"]'

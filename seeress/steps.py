@@ -28,7 +28,7 @@ LEAST_STEPS, MOST_STEPS = 2, 12
 LEAST_ROUND, MOST_ROUND = 2, 6
 LEAST_ROUNDS = 3
 
-# The most of an element that is shown.
+# The most of an element or of a page that is shown.
 ELEMENT_AT_MOST = 80
 
 _DIGIT = re.compile("[0-9]")
@@ -115,11 +115,12 @@ def lines(found: Sequence[Step]) -> list[str]:
     A line says what was done, the page, the element and at most ELEMENT_AT_MOST of it, the
     kind of a field, how many events of one sitting the step stood for when it was more than
     one, and `other tab` when in most sittings it was done in another tab than the step
-    before it.
+    before it. The page and the element are what a page chose, and are shown as _shown
+    shows them: as data, and never as a terminal reads them.
     """
     shown: list[str] = []
     for number, step in enumerate(found, start=1):
-        said = f"{number}. {step.kind}  {step.path}  {step.element[:ELEMENT_AT_MOST]}"
+        said = f"{number}. {step.kind}  {_shown(step.path)}  {_shown(step.element)}"
         if step.field:
             said += f"  {step.field}"
         if step.repeats > 1:
@@ -127,6 +128,27 @@ def lines(found: Sequence[Step]) -> list[str]:
         if step.other_tab:
             said += "  other tab"
         shown.append(("  steps:  " if number == 1 else "          ") + said)
+    return shown
+
+
+def _shown(text: str) -> str:
+    """What a page chose, as it may be shown.
+
+    Every character that is neither printable ASCII nor a letter or a digit is written as its
+    escape: a control, a format mark, a combining mark. So a name can add no line to a
+    report and drive no terminal, and a letter is never shown as another sign. At most
+    ELEMENT_AT_MOST characters are shown, and an escape is never cut.
+    """
+    shown = ""
+    for character in text:
+        part = (
+            character
+            if " " <= character <= "~" or character.isalnum()
+            else f"\\u{ord(character):04x}"
+        )
+        if len(shown) + len(part) > ELEMENT_AT_MOST:
+            break
+        shown += part
     return shown
 
 
