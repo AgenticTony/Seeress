@@ -980,7 +980,8 @@ def test_the_report_shows_the_steps_of_a_task_inside_one_site(tmp_path: Path) ->
         '          3. input  /report  input[name="line-#"]  text  ×3',
         '          4. click  /report  button[data-testid="save"]',
     ]
-    assert "  sites:  erp.example" in report
+    # A site that comes again right after itself is one line, and not four names on it.
+    assert "  sites:  erp.example" in report.splitlines()
     assert "  paths:" not in report
 
 

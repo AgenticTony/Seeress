@@ -602,3 +602,42 @@ def test_a_sequence_of_twelve_steps_is_found_whole() -> None:
     assert [(step.path, step.element) for step in found.steps or ()] == [
         (path, element[1]) for path, element in twelve
     ]
+
+
+def test_a_round_of_seven_steps_is_left_as_it_came() -> None:
+    seven = [(f"/{letter}", ("td", f'td[name="s{letter}"]')) for letter in "abcdefg"]
+    clock = Clock(MONDAY)
+    events = [
+        did("click", clock.now(), element, path=path) for _ in range(3) for path, element in seven
+    ]
+
+    found = steps.of(sitting_of(events))
+
+    assert len(found) == 21
+    assert all(unit.step is not None and unit.step.repeats == 1 for unit in found)
+
+
+def test_a_step_done_twice_with_one_of_them_in_another_tab_is_not_said_to_be() -> None:
+    clock = Clock(MONDAY)
+    events = [
+        did("click", clock.now(), CELL, tab=TARGET),
+        went("erp.example.com", clock.now()),
+        did("click", clock.now(), CELL),
+    ]
+
+    (only,) = steps.of(sitting_of(events))
+
+    assert only.step is not None and (only.step.repeats, only.step.other_tab) == (2, False)
+
+
+def test_the_kind_of_a_field_tells_two_steps_apart() -> None:
+    clock = Clock(MONDAY)
+    events = [
+        did("input", clock.now(), FIELD, field="text"),
+        did("input", clock.now(), FIELD, field="search"),
+    ]
+
+    found = steps.of(sitting_of(events))
+
+    assert [unit.step.field if unit.step else None for unit in found] == ["text", "search"]
+    assert all(len(unit.events) == 1 for unit in found)
