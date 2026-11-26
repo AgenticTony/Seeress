@@ -816,14 +816,15 @@ def write_status(
     """Say of the capture, in one file under home, what it is and what it has written.
 
     The file is home/watch/capture-status.json, for the user alone, and it replaces what
-    was there whole: a reader finds one report or the other, never half of one. It holds
-    the process, the state, the reason if one is given, since when the state is what it is,
-    how many events were written and when the last was. Since stays while the state stays
-    the same in the same process: a report that changes nothing does not move it. A new
-    process, or a new state, starts again from now, which is the machine's when none is
-    given.
+    was there whole, never rewritten in place: a reader finds one report or the other,
+    never none and never half of one. Its folder is made private when it is there and
+    open. It holds the process, the state, the reason if one is given, since when the
+    state is what it is, how many events were written and when the last was. Since stays
+    while the state stays the same in the same process: a report that changes nothing does
+    not move it. A new process, or a new state, starts again from now, which is the
+    machine's when none is given.
 
-    Raises OSError when the file cannot be written.
+    Raises OSError when the file cannot be written, or its folder cannot be made private.
     """
     when = time.time() if now is None else now
     since = activity.clock(when)
@@ -838,8 +839,7 @@ def write_status(
         "events": events,
         "last_event": last_event,
     }
-    watch = home / "watch"
-    watch.mkdir(mode=activity.PRIVATE, parents=True, exist_ok=True)
+    watch = activity.private_folder(home / "watch")
     path = watch / STATUS_FILE
     pending = path.with_name(f"{path.name}.new")
     opened = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, activity.PRIVATE_FILE)

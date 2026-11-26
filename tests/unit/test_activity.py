@@ -999,6 +999,67 @@ def test_an_event_is_for_the_user_alone(tmp_path: Path) -> None:
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def open_folder(path: Path) -> Path:
+    """A folder made as every process makes one, and as the older logger made the record's
+    folder: open to every other account on the machine."""
+    path.mkdir()
+    path.chmod(0o755)
+    return path
+
+
+def test_the_record_s_folder_is_made_private_when_it_is_already_there_and_open(
+    tmp_path: Path,
+) -> None:
+    """The older logger made the record's folder as every process makes one. A capture
+    that made it private only when the folder was missing would write its files, for the
+    user alone, into a folder any account can list."""
+    open_folder(tmp_path / "watch")
+
+    path = activity.write_event(tmp_path, click(), now=WRITTEN_AT)
+
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+
+
+def test_the_folder_of_a_note_is_made_private_when_it_is_already_there_and_open(
+    tmp_path: Path,
+) -> None:
+    open_folder(tmp_path / "watch")
+
+    activity.note_agent_run(tmp_path, 0.0, 1.0, "task", None)
+
+    assert stat.S_IMODE((tmp_path / "watch").stat().st_mode) == 0o700
+
+
+def test_each_folder_of_the_record_that_is_made_is_made_for_the_user_alone(
+    tmp_path: Path,
+) -> None:
+    """Not the last one alone. A folder made with its parents is left as every process
+    makes them."""
+    home = tmp_path / "a" / "b"
+
+    path = activity.write_event(home, click(), now=WRITTEN_AT)
+
+    made = [tmp_path / "a", home, path.parent]
+    assert [stat.S_IMODE(each.stat().st_mode) for each in made] == [0o700, 0o700, 0o700]
+
+
+def test_a_record_that_cannot_be_made_private_is_not_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A folder that is open, and not the user's to close: nothing is written into it."""
+    open_folder(tmp_path / "watch")
+
+    def not_mine(self: Path, mode: int, *, follow_symlinks: bool = True) -> None:
+        raise PermissionError("Not the user's to close")
+
+    monkeypatch.setattr(Path, "chmod", not_mine)
+
+    with pytest.raises(PermissionError, match="Not the user's to close"):
+        activity.write_event(tmp_path, click(), now=WRITTEN_AT)
+
+    assert list((tmp_path / "watch").iterdir()) == []
+
+
 def test_a_line_that_cannot_be_written_is_raised(tmp_path: Path) -> None:
     """The capture that calls it ends with the error, rather than going on and recording
     nothing."""

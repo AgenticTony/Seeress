@@ -505,21 +505,45 @@ def clock(when: float) -> str:
 # --------------------------------------------------------- writing the record ---
 
 
+def private_folder(path: Path) -> Path:
+    """Make path when it is missing, and every folder above it that is missing too, each
+    for the user alone. When path is there and open to other accounts, make it private.
+
+    The older logger made the record's folder as every process makes one, open to every
+    other account on the machine, which could list the days that were recorded. A folder
+    made with its parents would leave them open in the same way. A file in the way raises
+    FileExistsError, as mkdir does. A folder that cannot be made private raises OSError:
+    nothing is written into a record that is not the user's alone.
+    """
+    if not path.is_dir():
+        if not path.parent.exists():
+            private_folder(path.parent)
+        try:
+            path.mkdir(mode=PRIVATE)
+        except FileExistsError:
+            if not path.is_dir():  # a file is in the way, or it went again as it was made
+                raise
+    elif os.name == "posix" and path.stat().st_mode & 0o077:
+        path.chmod(PRIVATE)
+    return path
+
+
 def write_event(home: Path, event: Event, *, now: float | None = None) -> Path:
     """Append one activity event to the record under home, for the user alone.
 
     The file is home/watch/activity-YYYYMMDD.jsonl, named for the day the event is written,
     which is today when now is not given. It is never named for the day of the event's ts: an
     event written at midnight goes to the new day's file. The folder is made when it is
-    missing, for the user alone, and so is the file. One line of JSON per event, and nothing
-    else. Returns the file.
+    missing, and made private when it is there and open, for the user alone; and so is the
+    file. One line of JSON per event, and nothing else. Returns the file.
 
-    Raises OSError when the line cannot be written. A capture that cannot write ends with the
-    error and says so, rather than going on and recording nothing.
+    Raises OSError when the line cannot be written, or the folder cannot be made private. A
+    capture that cannot write ends with the error and says so, rather than going on and
+    recording nothing.
     """
     when = time.time() if now is None else now
     path = home / "watch" / f"activity-{time.strftime('%Y%m%d', time.localtime(when))}.jsonl"
-    path.parent.mkdir(mode=PRIVATE, parents=True, exist_ok=True)
+    private_folder(path.parent)
     line = json.dumps(event.as_dict(), ensure_ascii=False) + "\n"
     if not _ends_a_line(path):
         line = "\n" + line
@@ -532,12 +556,12 @@ def write_event(home: Path, event: Event, *, now: float | None = None) -> Path:
 def note(home: Path, file: str, fields: Mapping[str, object]) -> None:
     """Append one line to a file of the record under home, for the user alone.
 
-    The line is the fields as JSON. The folder is made when it is missing. Nothing is
-    raised when the line cannot be written: a note must never break the run it notes.
+    The line is the fields as JSON. The folder is made when it is missing, and made private
+    when it is there and open. Nothing is raised when the line cannot be written: a note
+    must never break the run it notes.
     """
     try:
-        watch = home / "watch"
-        watch.mkdir(mode=PRIVATE, parents=True, exist_ok=True)
+        watch = private_folder(home / "watch")
         line = json.dumps(dict(fields), ensure_ascii=False) + "\n"
         if not _ends_a_line(watch / file):
             line = "\n" + line

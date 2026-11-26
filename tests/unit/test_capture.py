@@ -1288,6 +1288,7 @@ def test_the_status_file_holds_what_the_capture_says_of_itself(tmp_path: Path) -
         "last_event": TS,
     }
     assert stat.S_IMODE((tmp_path / "watch" / "capture-status.json").stat().st_mode) == 0o600
+    assert stat.S_IMODE((tmp_path / "watch").stat().st_mode) == 0o700
     # The report replaces what was there and leaves nothing beside it.
     assert [path.name for path in (tmp_path / "watch").iterdir()] == ["capture-status.json"]
 
@@ -1307,6 +1308,17 @@ def test_the_status_file_is_replaced_whole_and_never_rewritten_in_place(tmp_path
     assert json.loads(held)["state"] == "connected"
     assert json.loads(path.read_text(encoding="utf-8"))["state"] == "stopped"
     assert [each.name for each in path.parent.iterdir()] == ["capture-status.json"]
+
+
+def test_the_status_is_written_into_a_folder_made_private_when_it_is_already_there_and_open(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "watch").mkdir()
+    (tmp_path / "watch").chmod(0o755)  # as the older logger made it
+
+    capture.write_status(tmp_path, "connected", None, events=0, last_event=None, now=WHEN)
+
+    assert stat.S_IMODE((tmp_path / "watch").stat().st_mode) == 0o700
 
 
 def test_one_event_is_one_event(tmp_path: Path) -> None:
